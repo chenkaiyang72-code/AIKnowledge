@@ -1,7 +1,9 @@
 # AIKnowledge 项目总体设计
 
-状态：Draft v0.2  
-更新日期：2026-07-27
+状态：Draft v0.3<br>
+更新日期：2026-07-28<br>
+技术落地映射：[技术蓝图](technical-blueprint.md)<br>
+执行任务：[具体实施计划](implementation-plan.md)
 
 ## 1. 结论先行
 
@@ -45,7 +47,7 @@
 4. **来源可追踪**：每条知识记录其来源、生成模型、提示词版本、创建人和审核状态。
 5. **安全默认拒绝**：检索权限不得超过用户对源仓库的权限。
 6. **读写分离**：查询工具可自动调用；新增、修订和发布知识属于写操作，需要权限和审核。
-7. **渐进式复杂度**：先用 PostgreSQL 完成闭环，规模或质量指标证明需要时再引入 Zoekt、图数据库等组件。
+7. **渐进式复杂度**：PostgreSQL 承担元数据、治理和向量；Zoekt 从结构化检索 PoC 起承担正式代码文本检索。图数据库、专用向量库和 Kubernetes 只在指标证明需要时引入。
 8. **外部内容不可信**：代码、文档、Issue、PR 和检索结果都按不可信数据处理，不能改变系统指令或扩大工具权限。
 9. **数据出域可控**：仓库访问权限与“允许发送给哪个模型提供商”是两套独立策略，必须同时满足。
 10. **范围显式**：每次查询必须解析到明确的 repository/solution snapshot 和可选 workspace overlay；范围不明确时不拼接“各仓最新版本”。
@@ -247,7 +249,7 @@ MCP 上下文模式只能可靠记录检索 trace，通常看不到客户端最�
 4. 先做方案级路由：根据术语、接口、模块和关系图选出候选仓库，避免对所有仓库无差别搜索。
 5. 若包含精确标识符，优先符号和全文检索。
 6. 在候选仓库内并行执行：
-   - PostgreSQL FTS 或 Zoekt 的全文/正则/标识符检索；
+   - Zoekt 的全文/正则/标识符检索（ripgrep 仅保留为评测 baseline 和故障诊断工具）；
    - SCIP 的定义、引用、实现关系和内部生成的调用候选扩展；
    - pgvector 语义检索；
    - 已发布团队知识检索。
@@ -365,10 +367,11 @@ MCP 上下文模式只能可靠记录检索 trace，通常看不到客户端最�
 | 范围 | MVP 选择 | 原因 | 后续升级条件 |
 | --- | --- | --- | --- |
 | 后端 | Python 3.12 + FastAPI | AI/解析生态成熟，迭代快 | CPU 热点再用 Go/Rust 拆分 |
-| MCP | 官方 MCP Python SDK v1.x + Streamable HTTP | 当前稳定、标准客户端覆盖广 | v2 稳定并通过兼容测试后升级 |
+| MCP | 官方 MCP Python SDK `mcp==1.28.0` + Streamable HTTP | 锁定已发布稳定线，避免 pre-release 协议变化影响客户端 | v2 GA tag 发布且 Cursor、Claude、VS Code 兼容测试通过后升级 |
 | 主数据库 | PostgreSQL 18 当前 minor | 事务、RLS、FTS、JSON、关系表统一 | 明确瓶颈后再拆；17 仍可作为兼容下限 |
 | 向量检索 | pgvector + 安全域分区 | 降低组件数，支持 HNSW 和混合检索 | 千万级 chunk 或独立扩缩容时评估 Qdrant |
-| 精确检索 | ripgrep + PostgreSQL FTS/pg_trgm PoC | 标识符、子串和正则可解释 | 多仓库或延迟不达标时提前引入 Zoekt |
+| 语义模型候选 | Qwen3-Embedding-0.6B + Qwen3-Reranker-0.6B | 可本地部署，覆盖代码和多语言；小模型适合先测成本收益 | 只有黄金集证明增益后进入 MVP；否则保留接口、不启用 |
+| 精确检索 | ripgrep 评测 baseline；Zoekt 正式通道 | baseline 简单可复现；Zoekt 面向代码提供 trigram、正则、符号信号和多仓搜索 | Zoekt 无法满足 ACL 后过滤召回或运维要求时重新评估 |
 | 语法解析 | Tree-sitter | 多语言、增量、适合结构化切块 | 保持为通用 fallback |
 | 精确代码智能 | SCIP + scip-clang | C/C++ 跨文件定义/引用更可靠 | 按语言增加 SCIP indexer |
 | Git 数据 | 本地 bare mirror + 对象存储备份 | commit 可复现，增量 fetch 快 | 多节点时共享对象存储/缓存 |
@@ -379,22 +382,24 @@ MCP 上下文模式只能可靠记录检索 trace，通常看不到客户端最�
 | 可观测性 | OpenTelemetry + Prometheus/Grafana | 统一追踪检索和索引质量 | 从第一版保留 trace_id |
 | 部署 | Docker Compose | 单机可快速验证 | 多团队、高可用后迁移 Kubernetes |
 
-Embedding、reranker 和生成模型通过 provider interface 配置，不写死供应商。先用一组真实内核问题评测候选模型，再决定云端或本地模型；模型更换时通过 `model_id + dimension + version` 并行重建索引，禁止原地混用不同 embedding。依赖显式锁定 `mcp>=1.x,<2`，在 MCP v2 稳定、Cursor/Claude/Copilot 兼容矩阵验证后再升级。
+Embedding、reranker 和生成模型通过 provider interface 配置，不写死供应商。Qwen3-Embedding-0.6B 与 Qwen3-Reranker-0.6B 只是首轮本地候选，必须先用真实内核问题证明质量收益；模型更换时通过 `model_id + dimension + version` 并行重建索引，禁止原地混用不同 embedding。首版依赖显式锁定 `mcp==1.28.0`；只有 MCP v2 发布 GA tag 且 Cursor、Claude、VS Code 兼容矩阵验证通过后才升级。
 
 ## 11. 可复用的开源项目
 
-| 项目 | 可复用价值 | 建议 |
-| --- | --- | --- |
-| [Tabby](https://github.com/TabbyML/tabby) | 自托管 AI 编程助手、仓库上下文、团队管理、Answer Engine | 最接近完整产品的基线；先部署 PoC 比较效果，但不要直接把全部业务耦合在其内部 |
-| [SCIP](https://github.com/scip-code/scip) | 语言无关代码智能协议，统一定义/引用/实现数据 | 直接采用其数据语义，避免自创代码符号协议 |
-| [scip-clang](https://github.com/sourcegraph/scip-clang) | 基于 Clang 的 C/C++/CUDA 精确索引和跨仓导航 | 对内核/C++ 仓库优先验证；需要可靠的 compilation database |
-| [Zoekt](https://github.com/sourcegraph/zoekt) | 面向大规模代码的快速 trigram 搜索 | 第二阶段替换简单全文搜索；不承担知识治理 |
-| [OpenGrok](https://github.com/oracle/opengrok) | 成熟的源码搜索、交叉引用和浏览器 | 可作为搜索质量基准或快速替代方案；与自有知识层集成成本较高 |
-| [Tree-sitter](https://github.com/tree-sitter/tree-sitter) | 增量语法树、多语言解析、容错 | 用于结构化 chunk、语言识别和 SCIP 缺失时的降级 |
-| [pgvector](https://github.com/pgvector/pgvector) | PostgreSQL 内向量检索、HNSW、混合搜索 | MVP 首选，减少运维复杂度 |
-| [Continue](https://github.com/continuedev/continue) | 开源 AI 客户端、模型适配、MCP/Agent 工作流 | 用作客户端兼容性测试，不作为共享知识源 |
-| [Microsoft GraphRAG](https://github.com/microsoft/graphrag) | 从非结构化文档提取实体关系、全局/局部查询 | 后期用于设计文档与跨模块主题；初期不要全量使用，成本高且代码关系应由静态分析产生 |
-| [MCP SDK](https://github.com/modelcontextprotocol/python-sdk) | 标准 tools/resources/prompts 和远程 transport | 直接采用官方 SDK，避免维护 Cursor/Claude 私有插件协议 |
+| 项目 | 对应组件 | 复用方式 | MVP 决策 |
+| --- | --- | --- | --- |
+| [Tree-sitter](https://github.com/tree-sitter/tree-sitter) | C3 Code Intelligence | 结构化 chunk、语言识别、SCIP 缺失时降级 | 直接依赖 |
+| [SCIP](https://github.com/scip-code/scip) | C3 Code Intelligence | 采用定义/引用/实现的数据语义和序列化格式 | 直接依赖 |
+| [scip-clang](https://github.com/sourcegraph/scip-clang) | C3 Code Intelligence | 从 compilation database 生成 C/C++/CUDA 精确索引 | 直接依赖，先验证目标内核仓库 |
+| [Zoekt](https://github.com/sourcegraph/zoekt) | C4 Lexical Search、C7 Retrieval | 建正式 trigram 代码索引，通过内部 JSON/gRPC adapter 查询 | Phase 0B 直接依赖；不承担权限和知识治理 |
+| [pgvector](https://github.com/pgvector/pgvector) | C5 Semantic Index、C6 Store | 保存 embedding 并参与混合检索 | 直接依赖 |
+| [Qwen3 Embedding](https://github.com/QwenLM/Qwen3-Embedding) | C5 Semantic Index | 0.6B embedding/reranker 作为本地评测候选 | 条件依赖；黄金集达标后启用 |
+| [MCP SDK](https://github.com/modelcontextprotocol/python-sdk) | C9 MCP Gateway | 实现标准 tools/resources 和 Streamable HTTP | 直接依赖，首版锁定 `1.28.0` |
+| [Keycloak](https://www.keycloak.org/) | C10 Identity/Policy | 没有企业 IdP 时提供 OIDC 测试与试点身份源 | 条件依赖；不替代仓库 ACL |
+| [Tabby](https://github.com/TabbyML/tabby) | 产品参考 | 比较 Answer Engine 和仓库上下文体验 | 仅参考/对照，不 fork、不作为运行依赖 |
+| [Continue](https://github.com/continuedev/continue) | 客户端验证 | 验证不同模型和 MCP 调用 | 仅测试客户端 |
+| [OpenGrok](https://github.com/oracle/opengrok) | 搜索对照 | 作为源码搜索质量基准 | 仅备选，不进入首版运行时 |
+| [Microsoft GraphRAG](https://github.com/microsoft/graphrag) | 后期文档研究 | 评估设计文档的主题与实体关系 | Phase 2 后研究；不生成代码调用关系 |
 
 Sourcegraph 完整平台是重要产品参考，但其公开仓库已经转为迁移前快照，且许可证结构需逐文件确认；更稳妥的做法是复用独立、许可证清晰的 SCIP、scip-clang、Zoekt，而不是 fork 整个平台。
 
@@ -410,7 +415,7 @@ Sourcegraph 完整平台是重要产品参考，但其公开仓库已经转为�
 
 ### Phase 0B：结构化检索 PoC
 
-- 加入 Tree-sitter、SCIP/scip-clang、pgvector 和稳定 citation。
+- 加入 Tree-sitter、SCIP/scip-clang、Zoekt、pgvector 和稳定 citation。
 - 比较 lexical、纯向量、lexical+向量、lexical+向量+符号四组方案。
 - 输出只读 Context Pack 和完整 retrieval trace。
 
@@ -445,7 +450,7 @@ Sourcegraph 完整平台是重要产品参考，但其公开仓库已经转为�
 - PR、开发分支和短期本地 diff 的 workspace overlay。
 - 从 release manifest/CI/BOM 自动生成 solution snapshot。
 - ADR、PR、Issue、commit message 和故障记录 connector。
-- 根据指标决定引入 Zoekt、reranker、更多语言索引器或专用向量库。
+- 扩展 Zoekt 分片与索引调度；根据指标决定是否启用 reranker、更多语言索引器或专用向量库。
 
 ### Phase 3：规模化
 
@@ -524,7 +529,7 @@ AIKnowledge/
 
 ## 16. 下一步
 
-下一步不应该立刻做完整 Web 平台，而是完成 Phase 0A/0B：确定一个目标代码仓库、一个可复现 build profile 和 30～50 个真实问题，先建立 lexical baseline，再测结构化混合检索的 Evidence Recall@K。具体任务、交付物、依赖和验收条件见 [实施计划](implementation-plan.md)。
+下一步不应该立刻做完整 Web 平台，而是完成 Phase 0A/0B：确定一个目标代码仓库、一个可复现 build profile 和 30～50 个真实问题，先建立 ripgrep lexical baseline，再接入 Tree-sitter、SCIP/scip-clang 与 Zoekt，测量结构化混合检索的 Evidence Recall@K。架构组件、开源复用边界和技术理由见 [技术蓝图](technical-blueprint.md)，具体任务、依赖和验收条件见 [实施计划](implementation-plan.md)。
 
 ## 17. 调研依据
 
@@ -541,6 +546,7 @@ AIKnowledge/
 - Tabby 已包含自托管、仓库上下文、团队能力和面向内部研发的 Answer Engine，可作为产品基线：[Tabby](https://github.com/TabbyML/tabby)
 - OpenGrok 提供源码搜索、交叉引用和版本历史导航：[OpenGrok](https://github.com/oracle/opengrok)
 - GraphRAG 明确提示索引成本较高，适合在验证需求后选择性采用：[Microsoft GraphRAG](https://github.com/microsoft/graphrag)
-- MCP Python SDK 当前以 v1.x 为稳定线并推荐生产使用 Streamable HTTP：[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+- MCP Python SDK 的 `2.0.0rc1` 仍标记为 pre-release；首版锁定 `1.28.0` 并使用 Streamable HTTP：[MCP Python SDK releases](https://github.com/modelcontextprotocol/python-sdk/releases)
+- Qwen3 Embedding/Reranker 提供面向文本与代码检索的多尺寸模型，首轮评测使用 0.6B 候选：[Qwen3-Embedding](https://github.com/QwenLM/Qwen3-Embedding)
 - OWASP 将外部文件引发的间接 Prompt Injection 作为独立风险，RAG 本身不能完全缓解：[OWASP LLM01](https://genai.owasp.org/llmrisk/llm01-prompt-injection/)
 - PostgreSQL 18 是当前稳定主版本，17 仍在支持周期内：[PostgreSQL Versioning Policy](https://www.postgresql.org/support/versioning/)

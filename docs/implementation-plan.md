@@ -1,8 +1,9 @@
 # AIKnowledge 具体实施计划
 
-状态：Draft v0.1  
-更新日期：2026-07-27  
+状态：Draft v0.2<br>
+更新日期：2026-07-28<br>
 对应设计：[项目总体设计](architecture.md)
+技术实现映射：[技术蓝图](technical-blueprint.md)
 
 ## 1. 计划目标与假设
 
@@ -35,6 +36,25 @@
 | 第 11～12 周 | Phase 1C 知识闭环 | feedback/gap/claim/review、最小 UI | 一条真实知识完成全流程 |
 
 每个阶段只有在退出条件满足后才能进入下一阶段。未达标时优先修正检索、数据和评测，不用增加更多模型或基础设施掩盖问题。
+
+### 2.1 架构组件—任务追踪矩阵
+
+| 蓝图组件 | 自研工作 | 直接复用 | 主要工作项 | 首次可用阶段 |
+| --- | --- | --- | --- | --- |
+| C1 Repository & Snapshot | 仓库注册、不可变 snapshot、solution 版本 | Git CLI | GIT-001/002、SOL-001/002 | Phase 0A/0C |
+| C2 Index Orchestrator | 幂等步骤、outbox、发布状态机 | Dramatiq、Redis、Docker | OPS-001、IDX-001、SEC-003 | Phase 0B |
+| C3 Code Intelligence | SCIP importer、logical symbol、citation、调用候选 | Tree-sitter、SCIP、scip-clang | IDX-002～005、DATA-002/003 | Phase 0B |
+| C4 Lexical Search | ACL/scope adapter、结果标准化 | ripgrep、Zoekt | RET-001、RET-003、RET-006 | Phase 0A/0B |
+| C5 Semantic Index | embedding pipeline、模型版本和安全域 | Qwen3 Embedding/Reranker、pgvector | RET-003/004、EVAL-006 | Phase 0B |
+| C6 Metadata/Knowledge Store | 领域 schema、状态机、provenance、RLS | PostgreSQL、SQLAlchemy、Alembic | DATA-001～004、KB-001、AUTH-004 | Phase 0B/1C |
+| C7 Hybrid Retrieval | scope resolver、四路召回、RRF、预算 | Zoekt/pgvector adapters | RET-003～006、SOL-004/005 | Phase 0B/0C |
+| C8 Context/Answer | Context Pack、provider boundary | Pydantic、FastAPI | CTX-001、ANS-001 | Phase 0B/1C |
+| C9 MCP Gateway | tool 语义、read/write 隔离、客户端策略 | MCP Python SDK | MCP-001～005、INT-001/002 | Phase 1A |
+| C10 Identity/Policy | 权限映射、数据出域、缓存隔离 | OIDC/Keycloak、PostgreSQL RLS | AUTH-002～004、POL-001、SEC-001～004 | Phase 1B |
+| C11 Knowledge Evolution | feedback/gap/claim/review/re-anchor | 不依赖完整外部产品 | KB-001～005、WEB-001 | Phase 1C |
+| C12 Observability/Eval | 黄金集、指标和回归框架 | pytest、OpenTelemetry、Prometheus | EVAL-001～009、OBS-001 | Phase 0A 起 |
+
+这张表是排期入口。新增技术或工作项时必须先说明它属于哪个组件、替代什么、改善哪个验收指标；无法建立映射的组件不进入 MVP。
 
 ## 3. Phase 0A：评测基线（第 1 周）
 
@@ -91,6 +111,7 @@
 | RET-003 | 实现 lexical、vector、symbol 三路召回 | retriever interfaces |
 | RET-004 | 实现 RRF 融合、过滤和 token budget | hybrid retrieval |
 | RET-005 | 实现稳定 citation 和源片段读取 | evidence service |
+| RET-006 | 用 `zoekt-git-index` 和内部 Zoekt API 替换正式 lexical 通道 | Zoekt adapter + index job |
 
 ### 第 4 周：Context Pack 与对比评测
 
@@ -100,7 +121,7 @@
 | TRACE-001 | 记录 query、scope、召回项、分数和耗时 | retrieval trace |
 | EVAL-006 | 比较四组检索方案 | 对比报告 |
 | EVAL-007 | 执行 citation、unknown 和版本测试 | 质量报告 |
-| ADR-001 | 根据数据决定是否提前引入 Zoekt/reranker | ADR 文档 |
+| ADR-001 | 根据数据决定 Qwen3 embedding/reranker 是否达到启用门槛 | ADR 文档 |
 
 ### 验收门槛
 
@@ -139,7 +160,7 @@
 
 | ID | 工作 | 产出 |
 | --- | --- | --- |
-| MCP-001 | 锁定 MCP Python SDK v1.x 并建立兼容测试 | dependency lock + tests |
+| MCP-001 | 锁定 `mcp==1.28.0` 并建立 v2/客户端兼容测试 | dependency lock + tests |
 | MCP-002 | 实现 `scope.resolve` | read tool |
 | MCP-003 | 实现 `context.search` 和分页/大小限制 | read tool |
 | MCP-004 | 实现 `context.get` 和 token budget | read tool |
@@ -212,7 +233,7 @@
 - workspace overlay：PR、branch 和短期本地 diff。
 - 自动读取 release manifest、CI/BOM 生成 solution snapshot。
 - ADR、Issue、PR、commit message、故障记录和会议纪要 connector。
-- Zoekt、cross-encoder reranker、专用向量库或图数据库。
+- 更大规模 Zoekt 分片、专用向量库或图数据库；reranker 是否启用由 Phase 0B 指标决定。
 - 更多 SCIP indexer 和跨语言/跨仓符号映射。
 - 运行时 trace、测试覆盖和生产遥测形成 observed runtime edge。
 - Copilot cloud agent 的只读短期服务凭据与企业 allowlist 集成。
@@ -221,7 +242,7 @@
 
 | ADR | 决策问题 | 最迟完成时间 |
 | --- | --- | --- |
-| ADR-001 | lexical/Zoekt/reranker 的投入顺序 | Phase 0B 结束 |
+| ADR-001 | Qwen3 embedding/reranker 是否达到进入 MVP 的收益门槛 | Phase 0B 结束 |
 | ADR-002 | Context Pack v1 schema 和兼容策略 | Phase 0B 结束 |
 | ADR-003 | symbol identity 与 citation re-anchor 算法 | Phase 0B 第 2 周 |
 | ADR-004 | solution snapshot 来源与版本选择策略 | Phase 0C 第 1 周 |
