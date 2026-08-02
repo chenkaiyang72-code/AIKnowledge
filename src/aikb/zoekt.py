@@ -378,7 +378,7 @@ class ZoektClient:
             f'content:"{_quote_value(term)}"' for term in terms
         )
         repository_query = " or ".join(
-            f"repo:^{name}$" for name in scopes
+            f'repo:"{_quote_value(name)}"' for name in scopes
         )
         zoekt_query = f"({content_query}) ({repository_query})"
         payload = {
