@@ -10,9 +10,13 @@
 
 | 通道 | 当前 adapter | 权重 | 作用 |
 | --- | --- | ---: | --- |
-| `lexical_fts5` | SQLite FTS5 | 1.0 | 普通文本和标识符召回 |
+| `lexical_zoekt` | Zoekt（正式通道） | 1.0 | 大仓文本、标识符、路径和正则召回 |
+| `lexical_fts5` | SQLite FTS5（回退） | 1.0 | 本地 bootstrap 与故障回退 |
+| `lexical_postgres_fts` | PostgreSQL simple-text FTS（回退） | 1.0 | 团队主库故障回退 |
 | `symbol_exact` | `symbol_occurrence` | 2.0 | 提升精确名称的定义和声明 |
 | `relation_source` | `relation` | 0.75 | 补充直接调用、依赖和关系位置 |
+
+三种 lexical provider 是互斥实现：一次查询只把实际使用的一个 lexical 通道写入 trace。Zoekt 不可用时才回退；协议错误、越界 repository 或版本不一致不会被静默降级。
 
 每个通道产生独立 rank。候选的融合分数为：
 
@@ -31,7 +35,7 @@ python -m aikb kb-retrieve `
   --top-k 10
 ```
 
-每条结果包含 `fused_score` 和 `contributions`，可以看到它在每个通道的 rank、weight 和 reciprocal score。Context Pack v1.1 使用同一结果并把这些信息写入 retrieval trace。
+每条结果包含 `fused_score` 和 `contributions`，可以看到它在每个通道的 rank、weight 和 reciprocal score。Context Pack v1.2 使用同一结果并把这些信息写入 retrieval trace。
 
 ## 真实源码结果
 
@@ -51,7 +55,6 @@ FTS5 只用于 `MATCH`。symbol/relation 通道不再用 `chunk_id` 等值扫描
 
 ## 下一步
 
-1. 定义 retriever provider interface，使 SQLite/Zoekt/pgvector adapter 可以通过配置组合。
-2. 接入 Zoekt 作为正式 lexical 通道，SQLite FTS5 保留为 bootstrap 和故障回退。
-3. 将 catalog 领域模型迁移到 PostgreSQL，并通过 migration/约束测试验证。
-4. 恢复真实问题集，用 Evidence Recall@10 和 MRR 决定 vector/reranker 是否值得启用。
+1. 用现有真实问题集自动对比 FTS baseline、Zoekt + symbol/relation RRF。
+2. 接入 pgvector 实验通道，但只有 Evidence Recall@10/MRR 有可复现增益时才保留 embedding/reranker。
+3. 增加跨仓 solution snapshot 路由，使多个不可变 repository snapshot 进入同一检索 scope。

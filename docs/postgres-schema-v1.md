@@ -51,7 +51,7 @@ schema v1 包含 15 张业务表：
 14. `chunk_embedding`
 15. `retrieval_trace`
 
-schema v2 增加 `chunk.content` 和 `to_tsvector('simple', content)` GIN index。正文用于稳定 evidence 读取；GIN 只作为 PostgreSQL bootstrap/故障回退 lexical 通道，正式服务仍计划使用 Zoekt。
+schema v2 增加 `chunk.content` 和 `to_tsvector('simple', content)` GIN index。正文用于稳定 evidence 读取；GIN 只作为 PostgreSQL bootstrap/故障回退 lexical 通道，正式服务通过已实现的 `ZoektReadCatalog` 使用 Zoekt。
 
 关键约束：
 
@@ -116,7 +116,7 @@ GitHub Actions 使用 PostgreSQL 17 pgvector service 执行这组测试。本地
 ## 尚未完成
 
 - scanner 当前仍先写本地 SQLite 再显式 publish；后台 index orchestrator、队列重试和自动发布尚未实现。
-- PostgreSQL lexical 目前是 bootstrap/故障回退，正式 Zoekt adapter 尚未实现。
+- PostgreSQL lexical 仍是 bootstrap/故障回退；Zoekt adapter 已实现，但团队环境的常驻 Zoekt 部署与运维尚未完成。
 - organization/team/repository ACL 和 RLS policy 尚未加入；`retrieval_trace` 已预留 principal/security domain 字段。
 - vector adapter、模型选择和 ANN index 尚未实现。
 - 生产备份、连接池、分区和数据保留策略尚未验证。

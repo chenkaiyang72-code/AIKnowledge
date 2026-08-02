@@ -2,7 +2,7 @@
 
 最后更新：2026-08-02<br>
 当前阶段：Phase 0B 本地知识库启动骨架（进行中）<br>
-当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立 source-only 本地索引、Context Pack v1.1、lexical/symbol/relation RRF，以及经 CI 验证的 PostgreSQL schema v2、read adapter 和原子 snapshot publisher。整个索引链路不编译源码；下一步接入正式 Zoekt lexical adapter。
+当前结论：已建立 source-only 本地索引、Context Pack v1.2、lexical/symbol/relation RRF、PostgreSQL 共享存储与原子 publisher，并完成正式 Zoekt lexical adapter 的真实镜像集成验证。整个索引链路不编译源码；下一步恢复现有问题集的自动评测，依据增量收益决定是否启用 vector/reranker，人工证据复核继续暂停。
 
 ## 维护规则
 
@@ -96,14 +96,14 @@
 - 具体样例：`kb-symbol init_idle` 已同时返回 `include/linux/sched/task.h:64` 的声明和 `kernel/sched/core.c:7969-8027` 的定义；C header 与 C implementation 当前仍保留不同 logical symbol ID，后续必须基于语言族、签名、definition 数量和条件判断后再安全归并。
 - 已修正分析缓存边界：依赖扫描预算属于 snapshot index profile，不属于 blob analysis profile。默认扩展首次扫描为 52 hit/166 miss；只把文件预算从 500 改为 499 后为 218 hit/0 miss，证明范围策略变化可以复用全部未变化源码分析。
 - 默认配置 active snapshot 为 `snap_0b0e8c0e71ad7f720c31b8e2`；重复扫描返回相同 snapshot 且 `idempotent=true`，已存在的 superseded snapshot 可原子重新激活并保留事件记录。
-- 已实现 Context Pack v1.1 Pydantic schema 与 `kb-context-schema`：固定 `urn:aiknowledge:schema:context-pack:v1`，拒绝额外字段，版本字段必须显式存在。
+- 已实现 Context Pack v1.2 Pydantic schema 与 `kb-context-schema`：固定 `urn:aiknowledge:schema:context-pack:v1`，拒绝额外字段，版本字段必须显式存在，并区分实际 lexical provider。
 - 已实现 `kb-context`：输出不可变 snapshot、blob/chunk 哈希、稳定 citation、代码证据、symbol/关系候选、预算、coverage、gap 和确定性 retrieval trace；它不调用模型、不生成答案。
 - 已实现证据条数和近似 token 预算，逐候选记录 `selected`、`item_budget` 或 `token_budget`；无证据查询返回 `evidence_status=none`。
 - 已实现 `retrieval.py` 通道接口和 RRF：`lexical_fts5` 权重 1.0、`symbol_exact` 权重 2.0、`relation_source` 权重 0.75，`k=60`；每条候选保留独立通道 rank 和贡献。
 - 已增加 `kb-retrieve` CLI，可独立检查 identifier terms、通道候选数、fused score、贡献和稳定 citation。
 - 真实 `init_idle do_idle` 中，`init_idle` 定义由纯 FTS 第 4 提升到混合检索第 1，头文件声明第 2，`do_idle` 定义第 3。
 - 已消除 symbol/relation 反查 FTS5 虚表的性能问题：改为从压缩 blob 按 chunk 行范围读取，并增加 chunk/relation 索引；真实混合检索从约 8.3 秒降到约 0.38 秒，完整 Context Pack 约 0.97 秒。
-- 真实 Context Pack v1.1 为 `context_8f20640aa1d2f62501cdb7ec`，trace 为 `trace_5c4ec50ca3e25a95b4b186d6`；第一条 `core.c:7961-8027` 同时得到三个通道支持。
+- 真实 FTS 验证生成的 Context Pack v1.1 为 `context_8f20640aa1d2f62501cdb7ec`，trace 为 `trace_5c4ec50ca3e25a95b4b186d6`；v1.2 延续相同 evidence/citation 语义并增加实际 lexical provider；第一条 `core.c:7961-8027` 同时得到三个通道支持。
 - 自动化测试覆盖 schema 严格性、确定性、citation 回查、预算截断、unknown/gap、精确符号提升、关系召回和 RRF 稳定性；连同 PostgreSQL 集成测试现为 25 个并在 CI 全部通过。
 - 已定义 `ReadCatalog` Protocol，Context Pack/RRF 不再依赖 SQLite 具体类型，为 PostgreSQL/Zoekt adapter 固定边界。
 - 已实现 PostgreSQL/pgvector schema v1：15 张业务表覆盖不可变 snapshot、内容寻址 blob、代码结构、embedding model/vector 和最小 retrieval trace；每仓唯一 active snapshot 由 partial unique index 强制。
@@ -115,6 +115,10 @@
 - 已实现 `PostgresSnapshotPublisher` 和 `kb-publish-postgres`：从已验证的 SQLite source-only snapshot 有界批量复制全部索引产物，不会把大型仓库整表载入内存。
 - publisher 在单个事务中执行 repository advisory lock、`building -> validated -> active`、派生计数复核和旧 active supersede；重复发布幂等，superseded snapshot 可重新激活，失败整体回滚。
 - PostgreSQL publisher/reader 已在真实 PostgreSQL 17 + pgvector CI 完成 25/25 测试；包含 `batch_size=1` 边界、Context Pack、多词 lexical OR、两次版本切换、历史版本恢复和注入失败回滚，run 为 `30751565583`。
+- 已实现 `kb-zoekt-export`：只接受已验证 snapshot，逐 blob 校验 zlib、SHA-256、大小和计数，原子生成 `source/`、`manifest.json` 与 `zoekt.meta.json`；相同导出幂等，篡改或不安全路径会被拒绝。
+- 已实现 `ZoektClient` 与 `ZoektReadCatalog`：查询限定不可变 snapshot 内部仓库名，开启 BM25，严格拒绝越界 repository/版本，再按文件和行号映射回 SQLite/PostgreSQL 权威 chunk；只有 Zoekt 不可用时回退 FTS，trace 记录真实通道。
+- `kb-search`、`kb-retrieve`、`kb-context` 已支持 `AIKB_ZOEKT_URL`、`--zoekt-url` 和验收用 `--zoekt-required`；Context Pack 升级为 v1.2，允许 `lexical_zoekt`、`lexical_fts5` 和 `lexical_postgres_fts`。
+- GitHub Actions 使用固定官方预构建 Zoekt 镜像且传入 `-disable_ctags`，从 source-only fixture 索引并启动 JSON API；PostgreSQL 17 + pgvector、SQLite 和 Zoekt 共 29/29 测试通过，run 为 [`30753488893`](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30753488893)。
 
 ## 3. 还未完成的计划
 
@@ -126,8 +130,8 @@
 
 | 优先级 | 未完成事项 | 下一动作 | 完成条件 |
 | --- | --- | --- | --- |
-| P0 | 接入正式 Zoekt lexical adapter | 定义 provider interface，以 Zoekt 替换 FTS5 lexical 通道并保留回退 | `kb-retrieve`/Context Pack schema 不变，Zoekt 结果进入相同 RRF trace |
-| P1 | 增加 vector 通道并恢复评测 | 先接 pgvector，再用真实问题决定 embedding/reranker | Evidence Recall/MRR 有可复现提升，否则不启用模型 |
+| P0 | 恢复自动评测并形成可比较报告 | 让现有已保留问题自动跑 FTS 与 Zoekt/RRF，暂不要求人工复核 | 输出逐题证据、Evidence Recall@10、MRR、失败类型和可重复命令 |
+| P1 | 实验 vector 通道 | 在 pgvector schema 上接 embedding provider，与无向量结果做消融对比 | Evidence Recall/MRR 有可复现提升才保留模型，否则关闭通道 |
 | P1 | 扩大 source-only 规则覆盖 | 完善复杂 Kconfig/Kbuild 变量、更多语言 import 和注册模式 | 未解析/歧义统计可解释，并由真实问题决定规则优先级 |
 
 本地扫描和 PostgreSQL 共享存储的首条链路已经打通，但以下仍未完成：
@@ -135,8 +139,8 @@
 - scanner 当前仍先生成 SQLite snapshot 再显式发布；后台 index orchestrator、队列重试、自动发布和生产部署尚未完成。
 - Kconfig/Kbuild 第一版规则只覆盖常见语法，复杂变量展开和跨文件条件仍需扩展。
 - C header 声明与 C implementation 定义尚未做受约束的 logical symbol 归并；不能仅按同名强制合并，否则配置互斥实现或多个定义会被错误标成唯一目标。
-- 尚未部署 Zoekt 正式代码文本索引。
-- lexical、symbol、relation RRF 已实现；Zoekt、vector 和团队知识通道尚未接入。
+- Zoekt adapter 和可重复容器流程已完成；团队环境的常驻服务、分片调度、监控与滚动更新尚未部署。
+- lexical（Zoekt/FTS）、symbol、relation RRF 已实现；vector 和团队知识通道尚未接入。
 - Context Pack v1 已实现，但团队知识、ACL partial visibility 和 provider tokenizer 尚未接入。
 
 只有完成这些工作并通过 Phase 0B 指标后，才可以称为“成功建立了第一版单仓代码知识库”。
@@ -151,7 +155,7 @@
 
 ## 4. 下一步要做的事情
 
-当前暂停问题集工作，按照以下顺序推进 Phase 0B：
+当前恢复问题集的自动评测，人工证据复核仍暂停；按照以下顺序推进 Phase 0B：
 
 | 顺序 | 要做的事情 | 负责人 | 具体产出 | 完成判断 |
 | --- | --- | --- | --- | --- |
@@ -165,12 +169,12 @@
 | 8 | 建立 retriever 接口与本地 lexical/symbol/relation RRF | Codex | 通道契约、统一候选、RRF、分通道 trace | 已完成，`init_idle` 定义由第 4 提升到第 1 |
 | 9 | 建立 PostgreSQL/pgvector schema 与 migration | Codex | provider boundary、15 表 metadata、Alembic、CI service | 已完成，GitHub Actions PostgreSQL 17 上 23/23 测试通过 |
 | 10 | 实现 PostgreSQL read/write adapter | Codex | Context Pack read、分批写入、计数校验、原子发布、回滚 | 已完成，GitHub Actions PostgreSQL 17 上 25/25 测试通过 |
-| 11 | 接入 Zoekt 正式 lexical adapter | Codex | Zoekt index job、provider adapter、FTS fallback、健康检查 | schema 不变，结果进入相同 RRF trace，静态源码样例验证通过 |
-| 12 | 恢复评测问题集 | Codex + 用户 | 证据复核、负样本和黄金集 | 用真实问题验证 Phase 0B 是否达标 |
+| 11 | 接入 Zoekt 正式 lexical adapter | Codex | immutable export、预构建 Zoekt index job、provider adapter、FTS fallback、live CI | 已完成，29/29 测试通过，run `30753488893` |
+| 12 | 恢复评测问题集 | Codex | 自动评测 runner、FTS/Zoekt/RRF 对比、失败分类；人工复核继续暂停 | 用现有真实问题量化 Phase 0B 收益并产生 vector 决策输入 |
 
 ### 现在立即要做的动作
 
-下一项开发工作是接入 Zoekt 正式 lexical adapter：先固定不执行构建的 Zoekt 源码索引边界，再实现 provider adapter，使 `kb-retrieve` 和 Context Pack 在 schema 不变的情况下接收 Zoekt 候选并保留 PostgreSQL/SQLite FTS fallback。随后恢复现有问题集的自动评测，依据真实收益决定 vector 通道；人工证据复核仍可继续暂停。
+下一项开发工作是恢复现有问题集的自动评测：复用已保留的问题和 draft evidence，在不要求人工复核的前提下输出 FTS baseline、Zoekt + symbol/relation RRF 的逐题证据与汇总指标。评测结果用于决定 vector/embedding 是否值得进入正式通道；任何模型只有相对无向量方案取得可复现增益才保留。
 
 ## 相关文档
 
@@ -183,3 +187,4 @@
 - [Context Pack v1](context-pack-v1.md)
 - [本地混合检索 v1](hybrid-retrieval.md)
 - [PostgreSQL/pgvector schema v1](postgres-schema-v1.md)
+- [Zoekt source-only 索引与检索适配器](zoekt-adapter.md)

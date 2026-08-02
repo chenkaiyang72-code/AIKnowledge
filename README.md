@@ -19,6 +19,7 @@
 - [Context Pack v1：AI 客户端证据契约](docs/context-pack-v1.md)
 - [本地混合检索 v1：lexical/symbol/relation RRF](docs/hybrid-retrieval.md)
 - [PostgreSQL/pgvector schema v1](docs/postgres-schema-v1.md)
+- [Zoekt source-only 索引与检索适配器](docs/zoekt-adapter.md)
 
 首版技术路线：Python 模块化单体与独立 worker，使用 PostgreSQL/pgvector 保存元数据和向量，使用 Tree-sitter、源码标识符/关系提取器和 Zoekt 建立无需编译的代码索引，并通过只读 MCP 网关向不同 AI 客户端提供带版本和引用的 Context Pack。
 
@@ -48,7 +49,7 @@ python -m aikb kb-context `
   --evidence-token-budget 1200
 ```
 
-默认数据库位于 `.aikb/catalog.db`。`kb-symbol` 返回定义/声明、调用和 include 等直接扫描关系，并明确标注 `source_exact`、`source_inferred` 或 `ambiguous_candidate`。`kb-retrieve` 用确定性 RRF 融合 lexical、精确 symbol 和直接 relation 三个通道；`kb-context` 把融合结果输出为带不可变 snapshot、blob/chunk 哈希、稳定 citation、预算和 retrieval trace 的 Context Pack v1.1，没有证据时明确返回 gap。依赖扩展默认读取 scope 中的深度、文件数和每条引用候选数预算；只改变扫描预算不会使未变化源码的分析缓存失效。SQLite 只用于本地 bootstrap；团队共享主库仍按设计使用 PostgreSQL/pgvector。
+默认数据库位于 `.aikb/catalog.db`。`kb-symbol` 返回定义/声明、调用和 include 等直接扫描关系，并明确标注 `source_exact`、`source_inferred` 或 `ambiguous_candidate`。`kb-retrieve` 用确定性 RRF 融合 lexical、精确 symbol 和直接 relation 三个通道；`kb-context` 把融合结果输出为带不可变 snapshot、blob/chunk 哈希、稳定 citation、预算和 retrieval trace 的 Context Pack v1.2，没有证据时明确返回 gap。依赖扩展默认读取 scope 中的深度、文件数和每条引用候选数预算；只改变扫描预算不会使未变化源码的分析缓存失效。SQLite 只用于本地 bootstrap；团队共享主库仍按设计使用 PostgreSQL/pgvector。
 
 PostgreSQL schema 和 migration 可选安装：
 
@@ -70,6 +71,22 @@ python -m alembic upgrade head --sql
 ```
 
 发布器按有界批次复制静态扫描产物，在单个 PostgreSQL 事务内校验计数并执行 `building -> validated -> active`。每个仓库使用事务级 advisory lock；重复发布是幂等的，发布失败整体回滚，切换 active snapshot 不使用 force。数据库连接串优先放在 `AIKB_POSTGRES_URL`，不要提交到仓库。
+
+正式 lexical 通道可连接预构建 Zoekt 服务。先从已经验证的 catalog snapshot 导出只包含源码的不可变目录，再由禁用 ctags 的 Zoekt indexer 建索引；整个过程不运行源码仓库脚本，也不编译 Linux：
+
+```powershell
+python -m aikb kb-zoekt-export `
+  --db .aikb/catalog.db `
+  --snapshot-id snap_0b0e8c0e71ad7f720c31b8e2 `
+  --output .aikb/zoekt/linux-sched
+
+$env:AIKB_ZOEKT_URL = "http://127.0.0.1:6070"
+python -m aikb kb-retrieve `
+  --query "init_idle do_idle" `
+  --zoekt-required
+```
+
+Zoekt 容器的固定版本、索引和启动命令见[运行文档](docs/zoekt-adapter.md)。未设置 `AIKB_ZOEKT_URL` 时使用 catalog FTS；设置后若服务暂时不可用，默认回退到 SQLite/PostgreSQL FTS，生产验收可用 `--zoekt-required` 禁止回退。
 
 ## 核心原则
 

@@ -4,7 +4,7 @@
 
 Context Pack 是 AIKnowledge 提供给 Cursor、Claude Code、MCP 和未来托管回答服务的稳定证据契约。它只组织检索证据，不生成答案，也不把某个模型或检索引擎写进客户端协议。
 
-当前 schema 标识为 `urn:aiknowledge:schema:context-pack:v1`，版本为 `1.1`。Pydantic 模型位于 `src/aikb/context_pack.py`，可通过以下命令输出 JSON Schema：
+当前 schema 标识为 `urn:aiknowledge:schema:context-pack:v1`，版本为 `1.2`。Pydantic 模型位于 `src/aikb/context_pack.py`，可通过以下命令输出 JSON Schema：
 
 ```powershell
 python -m aikb kb-context-schema
@@ -34,7 +34,7 @@ python -m aikb kb-context-schema
 | `budget` | 证据条数、近似 token、symbol 和 relation 预算及实际使用量 |
 | `retrieval_trace` | retriever 版本、候选顺序、选择结果和省略原因 |
 
-v1.1 在 v1.0 的证据契约上增加 RRF 通道贡献：每条 evidence 和 trace candidate 都记录 `lexical_fts5`、`symbol_exact`、`relation_source` 的独立 rank、weight 和 reciprocal score。
+v1.1 在 v1.0 的证据契约上增加 RRF 通道贡献。v1.2 把 lexical provider 明确区分为 `lexical_fts5`、`lexical_postgres_fts` 和 `lexical_zoekt`；一次检索只报告实际执行的通道。每条 evidence 和 trace candidate 都记录实际 lexical、`symbol_exact`、`relation_source` 的独立 rank、weight 和 reciprocal score。provider 的变化不会改变 citation、snapshot 或 evidence 的消费方式。
 
 ## 预算语义
 
@@ -67,8 +67,10 @@ python -m aikb kb-context `
 
 ## 当前限制与后续兼容
 
-- 当前 lexical adapter 是 SQLite FTS5，只用于本地 bootstrap；精确 symbol、relation 和 RRF 已独立实现。
+- 正式 lexical adapter 已支持 Zoekt；SQLite FTS5 和 PostgreSQL simple-text FTS 只用于本地 bootstrap 与服务不可用时回退。
 - `team_knowledge` 尚未接入已审核知识条目。
 - `partial_visibility` 当前为 `false`；进入团队服务后必须由 ACL 层计算。
-- Zoekt 和 vector 检索将作为新的 retrieval adapter 接入 builder，不改变 Context Pack v1 的核心消费方式。
+- vector 检索仍是待评测 adapter；是否启用由真实问题集的增量收益决定。
 - 跨仓阶段会让 `scope.snapshots` 同时包含 solution snapshot 的多个仓库版本。
+
+Zoekt 端到端测试使用固定的官方预构建镜像，验证了导出、source-only 索引、JSON API 查询、scope 校验以及行位置回映射到权威 chunk；见 [GitHub Actions run 30753488893](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30753488893)。
