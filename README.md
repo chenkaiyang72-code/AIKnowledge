@@ -1,5 +1,7 @@
 # AIKnowledge
 
+[![test](https://github.com/chenkaiyang72-code/AIKnowledge/actions/workflows/test.yml/badge.svg)](https://github.com/chenkaiyang72-code/AIKnowledge/actions/workflows/test.yml)
+
 面向研发团队的、可被 AI 操作并能持续进化的代码知识库。
 
 项目希望把分散在代码、设计文档、历史问答和工程师经验中的知识，整理成带版本、来源和权限的共享上下文，并通过 MCP 提供给 Cursor、Claude Code、GitHub Copilot 等 AI 客户端。

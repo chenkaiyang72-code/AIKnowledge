@@ -2,7 +2,7 @@
 
 最后更新：2026-08-02<br>
 当前阶段：Phase 0B 本地知识库启动骨架（进行中）<br>
-当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立 source-only 本地索引、Context Pack v1.1、lexical/symbol/relation RRF，以及 PostgreSQL/pgvector schema v1/Alembic migration。整个索引链路不编译源码；当前等待 PostgreSQL 17 CI 集成验证，之后实现 PostgreSQL adapter 和正式 Zoekt lexical adapter。
+当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立 source-only 本地索引、Context Pack v1.1、lexical/symbol/relation RRF，以及经过 PostgreSQL 17 CI 验证的 PostgreSQL/pgvector schema v1。整个索引链路不编译源码；下一步实现 PostgreSQL read/write adapter 和 snapshot 原子发布，再接入正式 Zoekt lexical adapter。
 
 ## 维护规则
 
@@ -108,7 +108,7 @@
 - 已定义 `ReadCatalog` Protocol，Context Pack/RRF 不再依赖 SQLite 具体类型，为 PostgreSQL/Zoekt adapter 固定边界。
 - 已实现 PostgreSQL/pgvector schema v1：15 张业务表覆盖不可变 snapshot、内容寻址 blob、代码结构、embedding model/vector 和最小 retrieval trace；每仓唯一 active snapshot 由 partial unique index 强制。
 - 已建立 Alembic `0001_postgres_schema_v1` 和 `postgres` optional dependencies；使用 Psycopg binary 与预装 pgvector 镜像，不在开发机或 CI 编译数据库组件。
-- 本地 metadata/离线 DDL 验证通过；自动化测试现为 23 个，其中 21 个通过，2 个 PostgreSQL 集成测试因本机无服务按设计跳过。GitHub Actions PostgreSQL 17 实际 migration/约束验证待本次提交后运行。
+- 本地 metadata/离线 DDL 验证通过；本机运行 21 个通过、2 个 PostgreSQL 集成测试按设计跳过。GitHub Actions PostgreSQL 17 + pgvector 完整运行 23/23 通过，包括 Alembic upgrade、extension 检查和唯一 active snapshot 约束；验证 run 为 `30750390588`。
 
 ## 3. 还未完成的计划
 
@@ -158,13 +158,13 @@
 | 6 | 实现依赖引导的范围扩展 | Codex | 有界依赖发现、解析统计、snapshot profile | 已完成，46 个种子扩展到 218 个文件且歧义率下降 |
 | 7 | 输出 Context Pack v1 | Codex | evidence、citation、snapshot、trace、预算 | 已完成，真实 Linux 快照和 unknown 查询验证通过 |
 | 8 | 建立 retriever 接口与本地 lexical/symbol/relation RRF | Codex | 通道契约、统一候选、RRF、分通道 trace | 已完成，`init_idle` 定义由第 4 提升到第 1 |
-| 9 | 建立 PostgreSQL/pgvector schema 与 migration | Codex | provider boundary、15 表 metadata、Alembic、CI service | 已实现，本地离线验证通过；GitHub Actions 集成结果待确认 |
+| 9 | 建立 PostgreSQL/pgvector schema 与 migration | Codex | provider boundary、15 表 metadata、Alembic、CI service | 已完成，GitHub Actions PostgreSQL 17 上 23/23 测试通过 |
 | 10 | 实现 PostgreSQL adapter 并接入 Zoekt | Codex | read/write adapter、原子发布、正式 lexical index、健康检查 | PostgreSQL ingest/query 与 Context Pack 端到端通过 |
 | 11 | 恢复评测问题集 | Codex + 用户 | 证据复核、负样本和黄金集 | 用真实问题验证 Phase 0B 是否达标 |
 
 ### 现在立即要做的动作
 
-下一项动作是提交 migration 和 CI workflow，让 PostgreSQL 17 + pgvector 服务实际执行 upgrade/约束测试；CI 通过后立刻实现 PostgreSQL read/write adapter 和 snapshot 原子发布事务，再接入 Zoekt lexical adapter。所有 adapter 只能消费静态扫描产物，不得执行仓库构建。完成正式检索后恢复现有问题集的自动评测，人工证据复核仍可继续暂停。
+下一项开发工作是实现 PostgreSQL read/write adapter：先覆盖 snapshot/blob/file/chunk/symbol/relation 的事务写入与原子 active 切换，再实现 `ReadCatalog` 查询，让同一 Context Pack 测试矩阵同时跑 SQLite/PostgreSQL。随后接入 Zoekt lexical adapter。所有 adapter 只能消费静态扫描产物，不得执行仓库构建。完成正式检索后恢复现有问题集的自动评测，人工证据复核仍可继续暂停。
 
 ## 相关文档
 

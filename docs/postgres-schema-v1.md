@@ -87,9 +87,11 @@ python -m alembic upgrade head --sql
 
 GitHub Actions 使用 PostgreSQL 17 pgvector service 执行这组测试。本地机器不需要安装 Docker 或 PostgreSQL。
 
+2026-08-02 的首次完整 CI 已通过：23 个测试全部成功，包括 Alembic upgrade、pgvector extension 和唯一 active snapshot 约束。验证运行见 [GitHub Actions run 30750390588](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30750390588)。
+
 ## 尚未完成
 
-- PostgreSQL read/write adapter 尚未实现，运行时仍使用 SQLite bootstrap。
+- PostgreSQL read/write adapter 尚未实现，运行时仍使用 SQLite bootstrap；schema 和 migration 集成验证已经完成。
 - organization/team/repository ACL 和 RLS policy 尚未加入；`retrieval_trace` 已预留 principal/security domain 字段。
 - vector adapter、模型选择和 ANN index 尚未实现。
 - 生产备份、连接池、分区和数据保留策略尚未验证。
