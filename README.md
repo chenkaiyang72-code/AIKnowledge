@@ -6,11 +6,13 @@
 
 ## 当前阶段
 
-项目处于总体设计阶段：
+项目已进入 Phase 0A 评测基线阶段：
 
 - [项目总体设计](docs/architecture.md)
 - [技术蓝图：架构、技术与开源组件映射](docs/technical-blueprint.md)
 - [具体实施计划](docs/implementation-plan.md)
+- [项目进展：已完成与未完成事项](docs/progress.md)
+- [首个实验：Linux 6.18.40 lexical baseline](evals/datasets/linux-6.18.40/README.md)
 
 首版技术路线：Python 模块化单体与独立 worker，使用 PostgreSQL/pgvector 保存元数据和向量，使用 Tree-sitter、SCIP/scip-clang 和 Zoekt 建立代码索引，并通过只读 MCP 网关向不同 AI 客户端提供带版本和引用的 Context Pack。
 

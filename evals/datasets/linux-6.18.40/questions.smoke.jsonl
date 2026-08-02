@@ -1,0 +1,3 @@
+{"id":"linux-smoke-001","question":"do_sys_openat2 在哪里定义？","category":"symbol_definition","synthetic":true,"query_terms":["do_sys_openat2"],"required_evidence":[{"path":"fs/open.c","start_line":1420,"end_line":1422,"symbol":"do_sys_openat2"}]}
+{"id":"linux-smoke-002","question":"新创建任务第一次被唤醒时调用的 wake_up_new_task 在哪里实现？","category":"symbol_definition","synthetic":true,"query_terms":["wake_up_new_task"],"required_evidence":[{"path":"kernel/sched/core.c","start_line":4820,"end_line":4822,"symbol":"wake_up_new_task"}]}
+{"id":"linux-smoke-003","question":"创建进程的核心函数 copy_process 在哪里定义？","category":"symbol_definition","synthetic":true,"query_terms":["copy_process"],"required_evidence":[{"path":"kernel/fork.c","start_line":1934,"end_line":1938,"symbol":"copy_process"}]}

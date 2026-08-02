@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "scope_id": "linux-6.18.40-source-release",
+  "source": {
+    "project": "linux",
+    "version": "6.18.40",
+    "kind": "release_archive",
+    "archive_name": "linux-6.18.40.tar.xz",
+    "archive_sha256": "3712fc1ec839e4daac981176c8518912e8f452650aaedfe4381da4419613a431",
+    "git_commit": null
+  },
+  "build_profile": {
+    "status": "unavailable",
+    "architecture": null,
+    "config_sha256": null,
+    "compile_commands": false
+  },
+  "include_roots": [
+    "arch",
+    "block",
+    "crypto",
+    "Documentation",
+    "drivers",
+    "fs",
+    "include",
+    "init",
+    "io_uring",
+    "ipc",
+    "kernel",
+    "lib",
+    "mm",
+    "net",
+    "rust",
+    "security",
+    "virt"
+  ],
+  "exclude_globs": [
+    ".git/**",
+    "tools/**/test*/**",
+    "**/*.min.js"
+  ],
+  "limitations": [
+    "The extracted source tree has no Git metadata, so citations use release version plus file content identity rather than commit SHA.",
+    "No .config or compile_commands.json is available; configuration-dependent and compiler-resolved claims are out of scope for Phase 0A."
+  ]
+}

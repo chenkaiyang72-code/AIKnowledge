@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiknowledge"
+version = "0.1.0"
+description = "Versioned and auditable code context for AI clients"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+aikb-eval = "aikb.evaluation:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
