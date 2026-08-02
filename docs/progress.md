@@ -2,7 +2,7 @@
 
 最后更新：2026-08-02<br>
 当前阶段：Phase 0B 本地知识库启动骨架（进行中）<br>
-当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立 source-only 本地索引、Context Pack v1.1、lexical/symbol/relation RRF、经 CI 验证的 PostgreSQL schema v1，以及 schema v2/PostgreSQL read adapter。整个索引链路不编译源码；当前等待 read adapter CI，之后实现 snapshot 写入/原子发布，再接入正式 Zoekt lexical adapter。
+当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立 source-only 本地索引、Context Pack v1.1、lexical/symbol/relation RRF，以及经 CI 验证的 PostgreSQL schema v2/read adapter。整个索引链路不编译源码；下一步实现 snapshot 写入/原子发布，再接入正式 Zoekt lexical adapter。
 
 ## 维护规则
 
@@ -111,7 +111,7 @@
 - 本地 metadata/离线 DDL 验证通过；本机运行 21 个通过、2 个 PostgreSQL 集成测试按设计跳过。GitHub Actions PostgreSQL 17 + pgvector 完整运行 23/23 通过，包括 Alembic upgrade、extension 检查和唯一 active snapshot 约束；验证 run 为 `30750390588`。
 - 已增加 schema v2：`chunk.content` 提供稳定证据读取，PostgreSQL simple-text GIN index 只作为 bootstrap/故障回退，不替代 Zoekt。
 - 已实现 `PostgresCatalog` read adapter：覆盖 snapshot resolve、lexical fallback、精确 symbol、relation 和 `find_symbol`，可直接供现有 RRF/Context Pack 使用。
-- 已增加 PostgreSQL Context Pack 集成测试；本机当前 21 个通过、3 个数据库测试跳过，完整 24 项结果等待 GitHub Actions PostgreSQL 17 验证。
+- PostgreSQL Context Pack 集成测试已在 GitHub Actions PostgreSQL 17 上通过；完整结果 24/24，run 为 `30750652975`。
 
 ## 3. 还未完成的计划
 
@@ -162,12 +162,12 @@
 | 7 | 输出 Context Pack v1 | Codex | evidence、citation、snapshot、trace、预算 | 已完成，真实 Linux 快照和 unknown 查询验证通过 |
 | 8 | 建立 retriever 接口与本地 lexical/symbol/relation RRF | Codex | 通道契约、统一候选、RRF、分通道 trace | 已完成，`init_idle` 定义由第 4 提升到第 1 |
 | 9 | 建立 PostgreSQL/pgvector schema 与 migration | Codex | provider boundary、15 表 metadata、Alembic、CI service | 已完成，GitHub Actions PostgreSQL 17 上 23/23 测试通过 |
-| 10 | 实现 PostgreSQL adapter 并接入 Zoekt | Codex | read/write adapter、原子发布、正式 lexical index、健康检查 | read adapter 已实现、CI 待验证；write/publish 和 Zoekt 未完成 |
+| 10 | 实现 PostgreSQL adapter 并接入 Zoekt | Codex | read/write adapter、原子发布、正式 lexical index、健康检查 | read adapter 已完成并通过 CI；write/publish 和 Zoekt 未完成 |
 | 11 | 恢复评测问题集 | Codex + 用户 | 证据复核、负样本和黄金集 | 用真实问题验证 Phase 0B 是否达标 |
 
 ### 现在立即要做的动作
 
-下一项动作是让 CI 验证 schema v2 和 PostgreSQL Context Pack read adapter；通过后实现 snapshot/blob/file/chunk/symbol/relation 的事务写入与原子 active 切换，再接入 Zoekt lexical adapter。所有 adapter 只能消费静态扫描产物，不得执行仓库构建。完成正式检索后恢复现有问题集的自动评测，人工证据复核仍可继续暂停。
+下一项开发工作是实现 PostgreSQL write/publish adapter：在单个事务中写入 snapshot/blob/file/chunk/symbol/relation，校验计数后执行 `building -> validated -> active`，并原子 supersede 旧 active snapshot；失败必须整体回滚。随后接入 Zoekt lexical adapter。所有 adapter 只能消费静态扫描产物，不得执行仓库构建。完成正式检索后恢复现有问题集的自动评测，人工证据复核仍可继续暂停。
 
 ## 相关文档
 
