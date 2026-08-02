@@ -54,8 +54,22 @@ PostgreSQL schema 和 migration 可选安装：
 
 ```powershell
 python -m pip install -e ".[postgres]"
+$env:AIKB_POSTGRES_URL = "postgresql+psycopg://aikb:aikb@127.0.0.1:5432/aikb"
+python -m alembic upgrade head
+
+# 将本地已经验证的 active snapshot 原子发布到团队数据库
+python -m aikb kb-publish-postgres --db .aikb/catalog.db
+
+# 本地有多个仓库时，明确指定要发布的不可变 snapshot
+python -m aikb kb-publish-postgres `
+  --db .aikb/catalog.db `
+  --snapshot-id snap_0b0e8c0e71ad7f720c31b8e2
+
+# 仅查看 migration SQL，不连接数据库
 python -m alembic upgrade head --sql
 ```
+
+发布器按有界批次复制静态扫描产物，在单个 PostgreSQL 事务内校验计数并执行 `building -> validated -> active`。每个仓库使用事务级 advisory lock；重复发布是幂等的，发布失败整体回滚，切换 active snapshot 不使用 force。数据库连接串优先放在 `AIKB_POSTGRES_URL`，不要提交到仓库。
 
 ## 核心原则
 

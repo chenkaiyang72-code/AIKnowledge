@@ -2,7 +2,7 @@
 
 最后更新：2026-08-02<br>
 当前阶段：Phase 0B 本地知识库启动骨架（进行中）<br>
-当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立 source-only 本地索引、Context Pack v1.1、lexical/symbol/relation RRF，以及经 CI 验证的 PostgreSQL schema v2/read adapter。整个索引链路不编译源码；下一步实现 snapshot 写入/原子发布，再接入正式 Zoekt lexical adapter。
+当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立 source-only 本地索引、Context Pack v1.1、lexical/symbol/relation RRF，以及经 CI 验证的 PostgreSQL schema v2、read adapter 和原子 snapshot publisher。整个索引链路不编译源码；下一步接入正式 Zoekt lexical adapter。
 
 ## 维护规则
 
@@ -104,7 +104,7 @@
 - 真实 `init_idle do_idle` 中，`init_idle` 定义由纯 FTS 第 4 提升到混合检索第 1，头文件声明第 2，`do_idle` 定义第 3。
 - 已消除 symbol/relation 反查 FTS5 虚表的性能问题：改为从压缩 blob 按 chunk 行范围读取，并增加 chunk/relation 索引；真实混合检索从约 8.3 秒降到约 0.38 秒，完整 Context Pack 约 0.97 秒。
 - 真实 Context Pack v1.1 为 `context_8f20640aa1d2f62501cdb7ec`，trace 为 `trace_5c4ec50ca3e25a95b4b186d6`；第一条 `core.c:7961-8027` 同时得到三个通道支持。
-- 自动化测试覆盖 schema 严格性、确定性、citation 回查、预算截断、unknown/gap、精确符号提升、关系召回和 RRF 稳定性；现为 20 个并全部通过。
+- 自动化测试覆盖 schema 严格性、确定性、citation 回查、预算截断、unknown/gap、精确符号提升、关系召回和 RRF 稳定性；连同 PostgreSQL 集成测试现为 25 个并在 CI 全部通过。
 - 已定义 `ReadCatalog` Protocol，Context Pack/RRF 不再依赖 SQLite 具体类型，为 PostgreSQL/Zoekt adapter 固定边界。
 - 已实现 PostgreSQL/pgvector schema v1：15 张业务表覆盖不可变 snapshot、内容寻址 blob、代码结构、embedding model/vector 和最小 retrieval trace；每仓唯一 active snapshot 由 partial unique index 强制。
 - 已建立 Alembic `0001_postgres_schema_v1` 和 `postgres` optional dependencies；使用 Psycopg binary 与预装 pgvector 镜像，不在开发机或 CI 编译数据库组件。
@@ -112,6 +112,9 @@
 - 已增加 schema v2：`chunk.content` 提供稳定证据读取，PostgreSQL simple-text GIN index 只作为 bootstrap/故障回退，不替代 Zoekt。
 - 已实现 `PostgresCatalog` read adapter：覆盖 snapshot resolve、lexical fallback、精确 symbol、relation 和 `find_symbol`，可直接供现有 RRF/Context Pack 使用。
 - PostgreSQL Context Pack 集成测试已在 GitHub Actions PostgreSQL 17 上通过；完整结果 24/24，run 为 `30750652975`。
+- 已实现 `PostgresSnapshotPublisher` 和 `kb-publish-postgres`：从已验证的 SQLite source-only snapshot 有界批量复制全部索引产物，不会把大型仓库整表载入内存。
+- publisher 在单个事务中执行 repository advisory lock、`building -> validated -> active`、派生计数复核和旧 active supersede；重复发布幂等，superseded snapshot 可重新激活，失败整体回滚。
+- PostgreSQL publisher/reader 已在真实 PostgreSQL 17 + pgvector CI 完成 25/25 测试；包含 `batch_size=1` 边界、Context Pack、多词 lexical OR、两次版本切换、历史版本恢复和注入失败回滚，run 为 `30751565583`。
 
 ## 3. 还未完成的计划
 
@@ -123,14 +126,13 @@
 
 | 优先级 | 未完成事项 | 下一动作 | 完成条件 |
 | --- | --- | --- | --- |
-| P0 | 完成 PostgreSQL CI 验证并实现 adapter | GitHub Actions 应用 migration；随后实现 read/write adapter 和原子发布事务 | 真实 PostgreSQL 上 migration、唯一 active 约束、幂等 ingest 和查询通过 |
 | P0 | 接入正式 Zoekt lexical adapter | 定义 provider interface，以 Zoekt 替换 FTS5 lexical 通道并保留回退 | `kb-retrieve`/Context Pack schema 不变，Zoekt 结果进入相同 RRF trace |
 | P1 | 增加 vector 通道并恢复评测 | 先接 pgvector，再用真实问题决定 embedding/reranker | Evidence Recall/MRR 有可复现提升，否则不启用模型 |
 | P1 | 扩大 source-only 规则覆盖 | 完善复杂 Kconfig/Kbuild 变量、更多语言 import 和注册模式 | 未解析/歧义统计可解释，并由真实问题决定规则优先级 |
 
-当前 SQLite 骨架已经实现 repository/snapshot/blob/file/chunk 的本地持久化，但以下仍未完成：
+本地扫描和 PostgreSQL 共享存储的首条链路已经打通，但以下仍未完成：
 
-- PostgreSQL schema/migration 已实现但本机未部署；GitHub Actions 集成验证和运行时 adapter 尚未完成。
+- scanner 当前仍先生成 SQLite snapshot 再显式发布；后台 index orchestrator、队列重试、自动发布和生产部署尚未完成。
 - Kconfig/Kbuild 第一版规则只覆盖常见语法，复杂变量展开和跨文件条件仍需扩展。
 - C header 声明与 C implementation 定义尚未做受约束的 logical symbol 归并；不能仅按同名强制合并，否则配置互斥实现或多个定义会被错误标成唯一目标。
 - 尚未部署 Zoekt 正式代码文本索引。
@@ -162,12 +164,13 @@
 | 7 | 输出 Context Pack v1 | Codex | evidence、citation、snapshot、trace、预算 | 已完成，真实 Linux 快照和 unknown 查询验证通过 |
 | 8 | 建立 retriever 接口与本地 lexical/symbol/relation RRF | Codex | 通道契约、统一候选、RRF、分通道 trace | 已完成，`init_idle` 定义由第 4 提升到第 1 |
 | 9 | 建立 PostgreSQL/pgvector schema 与 migration | Codex | provider boundary、15 表 metadata、Alembic、CI service | 已完成，GitHub Actions PostgreSQL 17 上 23/23 测试通过 |
-| 10 | 实现 PostgreSQL adapter 并接入 Zoekt | Codex | read/write adapter、原子发布、正式 lexical index、健康检查 | read adapter 已完成并通过 CI；write/publish 和 Zoekt 未完成 |
-| 11 | 恢复评测问题集 | Codex + 用户 | 证据复核、负样本和黄金集 | 用真实问题验证 Phase 0B 是否达标 |
+| 10 | 实现 PostgreSQL read/write adapter | Codex | Context Pack read、分批写入、计数校验、原子发布、回滚 | 已完成，GitHub Actions PostgreSQL 17 上 25/25 测试通过 |
+| 11 | 接入 Zoekt 正式 lexical adapter | Codex | Zoekt index job、provider adapter、FTS fallback、健康检查 | schema 不变，结果进入相同 RRF trace，静态源码样例验证通过 |
+| 12 | 恢复评测问题集 | Codex + 用户 | 证据复核、负样本和黄金集 | 用真实问题验证 Phase 0B 是否达标 |
 
 ### 现在立即要做的动作
 
-下一项开发工作是实现 PostgreSQL write/publish adapter：在单个事务中写入 snapshot/blob/file/chunk/symbol/relation，校验计数后执行 `building -> validated -> active`，并原子 supersede 旧 active snapshot；失败必须整体回滚。随后接入 Zoekt lexical adapter。所有 adapter 只能消费静态扫描产物，不得执行仓库构建。完成正式检索后恢复现有问题集的自动评测，人工证据复核仍可继续暂停。
+下一项开发工作是接入 Zoekt 正式 lexical adapter：先固定不执行构建的 Zoekt 源码索引边界，再实现 provider adapter，使 `kb-retrieve` 和 Context Pack 在 schema 不变的情况下接收 Zoekt 候选并保留 PostgreSQL/SQLite FTS fallback。随后恢复现有问题集的自动评测，依据真实收益决定 vector 通道；人工证据复核仍可继续暂停。
 
 ## 相关文档
 
