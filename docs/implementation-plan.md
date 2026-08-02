@@ -29,7 +29,7 @@
 | 时间 | 里程碑 | 核心产出 | 退出条件 |
 | --- | --- | --- | --- |
 | 第 1 周 | Phase 0A 评测基线 | 黄金问题集、lexical baseline | 指标可自动复现 |
-| 第 2～4 周 | Phase 0B 结构化检索 | SCIP/Tree-sitter/向量、Context Pack | Recall 与版本指标达标 |
+| 第 2～4 周 | Phase 0B 结构化检索 | Tree-sitter/source-only 关系/向量、Context Pack | Recall 与版本指标达标 |
 | 第 5～6 周 | Phase 0C 跨仓 PoC | solution snapshot、跨仓路由 | 10+ 跨仓问题通过评测 |
 | 第 7～8 周 | Phase 1A 只读 MCP | Cursor/Claude 可用的 read tools | 两种客户端稳定调用 |
 | 第 9～10 周 | Phase 1B 安全试点 | OIDC、ACL、RLS、数据策略、增量索引 | 越权测试零泄露 |
@@ -43,7 +43,7 @@
 | --- | --- | --- | --- | --- |
 | C1 Repository & Snapshot | 仓库注册、不可变 snapshot、solution 版本 | Git CLI | GIT-001/002、SOL-001/002 | Phase 0A/0C |
 | C2 Index Orchestrator | 幂等步骤、outbox、发布状态机 | Dramatiq、Redis、Docker | OPS-001、IDX-001、SEC-003 | Phase 0B |
-| C3 Code Intelligence | SCIP importer、logical symbol、citation、调用候选 | Tree-sitter、SCIP、scip-clang | IDX-002～005、DATA-002/003 | Phase 0B |
+| C3 Code Intelligence | occurrence、条件图、logical symbol、citation、调用候选 | Tree-sitter | IDX-002～005、DATA-002/003 | Phase 0B |
 | C4 Lexical Search | ACL/scope adapter、结果标准化 | ripgrep、Zoekt | RET-001、RET-003、RET-006 | Phase 0A/0B |
 | C5 Semantic Index | embedding pipeline、模型版本和安全域 | Qwen3 Embedding/Reranker、pgvector | RET-003/004、EVAL-006 | Phase 0B |
 | C6 Metadata/Knowledge Store | 领域 schema、状态机、provenance、RLS | PostgreSQL、SQLAlchemy、Alembic | DATA-001～004、KB-001、AUTH-004 | Phase 0B/1C |
@@ -62,7 +62,7 @@
 
 | ID | 工作 | 产出 |
 | --- | --- | --- |
-| EVAL-001 | 选择首个目标仓库、commit 和 build profile | `evals/datasets/v1/scope.yaml` |
+| EVAL-001 | 选择首个目标仓库和固定 commit/归档摘要 | `evals/datasets/v1/scope.yaml` |
 | EVAL-002 | 收集 30～50 个历史真实问题 | 原始问题清单及问题来源 |
 | EVAL-003 | 标注关键仓库、文件、符号、代码范围和答案类型 | `questions.jsonl` |
 | EVAL-004 | 加入至少 20% 负样本/证据不足问题 | unknown 样本集合 |
@@ -74,7 +74,7 @@
 
 - 精确符号定义与引用。
 - caller/callee 或回调链路。
-- 宏、Kconfig、Makefile 和 build profile 差异。
+- 宏、Kconfig、Makefile 和条件表达式差异。
 - “为什么这样设计”的方案问题。
 - 跨目录模块关系。
 - 仓库中没有答案的负样本。
@@ -105,9 +105,10 @@
 
 | ID | 工作 | 产出 |
 | --- | --- | --- |
-| IDX-003 | 验证并导入 compilation database | build profile artifact |
-| IDX-004 | 接入 scip-clang，导入定义/引用/实现 | SCIP adapter |
-| IDX-005 | 用 AST + SCIP 产生带置信度的静态调用候选 | relation extractor |
+| IDX-003 | 直接扫描标识符、声明和 occurrence，建立 logical symbol 候选 | source symbol index |
+| IDX-004 | 解析 include/import、Kconfig/Kbuild 和预处理条件 | condition/dependency graph |
+| IDX-005 | 用 AST + 作用域/签名/注册模式产生带置信度的关系候选 | relation extractor |
+| IDX-006 | 从种子范围沿显式源码关系做有深度和文件预算的扩展 | bounded dependency expansion + diagnostics |
 | RET-003 | 实现 lexical、vector、symbol 三路召回 | retriever interfaces |
 | RET-004 | 实现 RRF 融合、过滤和 token budget | hybrid retrieval |
 | RET-005 | 实现稳定 citation 和源片段读取 | evidence service |
@@ -234,7 +235,7 @@
 - 自动读取 release manifest、CI/BOM 生成 solution snapshot。
 - ADR、Issue、PR、commit message、故障记录和会议纪要 connector。
 - 更大规模 Zoekt 分片、专用向量库或图数据库；reranker 是否启用由 Phase 0B 指标决定。
-- 更多 SCIP indexer 和跨语言/跨仓符号映射。
+- 更多 source-only 语言解析器和跨语言/跨仓符号映射。
 - 运行时 trace、测试覆盖和生产遥测形成 observed runtime edge。
 - Copilot cloud agent 的只读短期服务凭据与企业 allowlist 集成。
 
@@ -276,7 +277,7 @@
 ## 13. 开工前需要确认的输入
 
 1. 首个目标仓库及只读访问方式。
-2. 固定 commit、架构、编译器、配置文件和 compilation database 获取方法。
+2. 固定 commit 或发行归档摘要，并确认源码包含/排除范围；不需要构建环境。
 3. 30～50 个历史真实问题及能够审核答案的领域工程师。
 4. 是否允许代码或 embedding 发送到云端模型；若允许，批准的提供商列表。
 5. 首个跨仓 solution 涉及哪些仓库，以及是否存在 release manifest/BOM。

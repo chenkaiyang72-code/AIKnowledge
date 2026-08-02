@@ -95,15 +95,24 @@ def inspect_source(scope: dict[str, Any], source: Path, archive: Path | None) ->
     if actual_version != expected_version:
         raise ValueError(f"version mismatch: expected {expected_version}, got {actual_version}")
 
+    index_policy = scope.get("index_policy", {})
+    mode = index_policy.get("mode", "source_only")
+    execute_build = index_policy.get("execute_build", False)
+    requires_build_artifacts = index_policy.get("requires_build_artifacts", False)
+    if mode != "source_only" or execute_build or requires_build_artifacts:
+        raise ValueError(
+            "AIKnowledge only supports source-only indexing; builds and build artifacts are forbidden"
+        )
+
     result: dict[str, Any] = {
         "scope_id": scope["scope_id"],
         "source_version": actual_version,
         "source_exists": True,
         "git_metadata": (source / ".git").exists(),
-        "build_profile": {
-            "config": (source / ".config").exists(),
-            "compile_commands": (source / "compile_commands.json").exists(),
-            "module_symvers": (source / "Module.symvers").exists(),
+        "index_policy": {
+            "mode": "source_only",
+            "execute_build": False,
+            "requires_build_artifacts": False,
         },
     }
     if archive is not None:

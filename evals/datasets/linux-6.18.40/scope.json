@@ -9,11 +9,16 @@
     "archive_sha256": "3712fc1ec839e4daac981176c8518912e8f452650aaedfe4381da4419613a431",
     "git_commit": null
   },
-  "build_profile": {
-    "status": "unavailable",
-    "architecture": null,
-    "config_sha256": null,
-    "compile_commands": false
+  "index_policy": {
+    "mode": "source_only",
+    "execute_build": false,
+    "requires_build_artifacts": false,
+    "condition_handling": "preserve_expressions_and_ambiguity"
+  },
+  "dependency_expansion": {
+    "depth": 1,
+    "max_files": 500,
+    "max_candidates_per_reference": 8
   },
   "include_roots": [
     "arch",
@@ -41,6 +46,6 @@
   ],
   "limitations": [
     "The extracted source tree has no Git metadata, so citations use release version plus file content identity rather than commit SHA.",
-    "No .config or compile_commands.json is available; configuration-dependent and compiler-resolved claims are out of scope for Phase 0A."
+    "The index must not compile the source or depend on build artifacts; configuration-dependent relationships preserve their conditions and ambiguity."
   ]
 }

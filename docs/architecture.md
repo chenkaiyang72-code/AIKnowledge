@@ -1,7 +1,7 @@
 # AIKnowledge 项目总体设计
 
-状态：Draft v0.3<br>
-更新日期：2026-07-28<br>
+状态：Draft v0.4<br>
+更新日期：2026-08-02<br>
 技术落地映射：[技术蓝图](technical-blueprint.md)<br>
 执行任务：[具体实施计划](implementation-plan.md)
 
@@ -15,7 +15,7 @@
 
 核心产品是模型无关的“共享上下文基础设施”：负责索引、检索、权限、引用和知识治理，不要求团队统一使用某个模型。同时提供可选的“托管回答服务”，用于 Web/机器人等需要保存最终回答、执行完整评测和形成学习闭环的场景。
 
-第一版采用模块化单体，不做微服务；采用 PostgreSQL + pgvector 作为主数据层，Git 镜像保存原始事实，Tree-sitter + SCIP/scip-clang 建立代码结构，全文/符号/向量/关系混合检索，通过受控的 Streamable HTTP MCP 接入 Cursor、Claude Code、Copilot 等客户端。
+第一版采用模块化单体，不做微服务；采用 PostgreSQL + pgvector 作为主数据层，Git 镜像保存原始事实，Tree-sitter + 源码标识符/关系提取器建立无需编译的代码结构，全文/符号/向量/关系混合检索，通过受控的 Streamable HTTP MCP 接入 Cursor、Claude Code、Copilot 等客户端。
 
 最重要的产品规则是：
 
@@ -41,7 +41,7 @@
 
 ## 3. 设计原则
 
-1. **代码事实优先**：源代码、构建配置和提交历史是一等数据，AI 摘要只是派生数据。
+1. **代码事实优先**：源代码、条件表达式、清单和提交历史是一等数据，AI 摘要只是派生数据。
 2. **版本化**：任何引用必须包含仓库、commit、路径和行号；不能用“当前最新”代替版本。
 3. **多路检索**：标识符/全文、符号关系、语义向量、团队知识分别召回，再统一重排。
 4. **来源可追踪**：每条知识记录其来源、生成模型、提示词版本、创建人和审核状态。
@@ -51,6 +51,7 @@
 8. **外部内容不可信**：代码、文档、Issue、PR 和检索结果都按不可信数据处理，不能改变系统指令或扩大工具权限。
 9. **数据出域可控**：仓库访问权限与“允许发送给哪个模型提供商”是两套独立策略，必须同时满足。
 10. **范围显式**：每次查询必须解析到明确的 repository/solution snapshot 和可选 workspace overlay；范围不明确时不拼接“各仓最新版本”。
+11. **禁止编译依赖**：正式索引只扫描源码，不执行构建，不要求 `.config` 或 compilation database；无法唯一确定的关系必须标记为候选和置信度。
 
 ## 4. 总体架构
 
@@ -75,7 +76,7 @@ flowchart LR
     W["GitHub/GitLab Webhook"] --> I["增量索引流水线"]
     I --> M["Git 镜像与版本快照"]
     I --> T["Tree-sitter"]
-    I --> X["SCIP / scip-clang"]
+    I --> X["源码标识符与关系提取器"]
     I --> D["摘要与 Embedding"]
     M --> F
     T --> S
@@ -92,7 +93,7 @@ flowchart LR
 ### 4.1 模块边界
 
 - **Repo Connector**：连接 GitHub/GitLab/本地 Git，维护 bare mirror 和目标分支。
-- **Indexer Worker**：解析文件、符号、引用、调用、include、构建配置和文档。
+- **Indexer Worker**：直接扫描文件，解析符号、引用候选、调用候选、include、Kconfig/Kbuild 条件和文档；禁止执行构建脚本。
 - **Knowledge Service**：管理人工知识、AI 提案、版本、审核和过期状态。
 - **Retrieval Service**：理解查询，执行多路召回、融合、重排和上下文预算控制。
 - **Policy Service**：执行仓库 ACL、安全域、模型出域策略、数据保留和客户端能力策略。
@@ -109,7 +110,7 @@ flowchart LR
 
 | 层级 | 内容 | 是否可直接作为事实 | 更新方式 |
 | --- | --- | --- | --- |
-| L0 源事实 | Git blob、文件、commit、构建配置、原始文档 | 是 | Git 同步 |
+| L0 源事实 | Git blob、文件、commit、条件表达式、清单、原始文档 | 是 | Git 同步 |
 | L1 分析事实 | 符号、定义/引用、静态调用候选、include、模块关系 | 是“分析器观察结果”，不是运行时真相 | 解析器增量生成 |
 | L2 派生知识 | 文件/符号/模块摘要、概念标签、架构关系 | 否，必须保留证据 | AI 生成、自动校验、可审核 |
 | L3 团队知识 | 已验证问答、故障案例、ADR、使用约束、专家注释 | 审核后是 | 人工编辑或从提问中提案 |
@@ -121,7 +122,7 @@ flowchart LR
 - `repository`：仓库、代码托管地址、默认分支、权限映射。
 - `snapshot`：仓库在某个 commit 下的不可变索引版本。
 - `solution`：一个跨仓方案/产品/子系统的逻辑边界，例如“启动链路”或“存储方案”。
-- `solution_snapshot`：该方案在某一时刻所使用的一组仓库 commit、构建画像和外部依赖版本。
+- `solution_snapshot`：该方案在某一时刻所使用的一组仓库 commit、清单和外部依赖版本。
 - `solution_member`：方案包含的仓库、目录、模块、角色及版本选择规则。
 - `workspace_overlay`：叠加在正式 snapshot 上的 PR、开发分支或短期本地 diff。
 - `source_file` / `source_blob`：路径、语言、内容哈希、大小、生成文件标记。
@@ -146,8 +147,8 @@ flowchart LR
 ```text
 Solution: storage-stack
   SolutionSnapshot: release-2026.07
-    kernel-repo       @ 8f21...   profile=x86_defconfig
-    driver-repo       @ 19ac...   profile=prod
+    kernel-repo       @ 8f21...
+    driver-repo       @ 19ac...
     firmware-repo     @ 02bd...
     design-docs       @ 771e...
     api-contract      @ v3.4
@@ -157,14 +158,14 @@ Solution: storage-stack
 
 跨仓关系包含：
 
-- SCIP 外部符号、链接符号及跨仓定义/引用；
+- 共享头文件、导出符号、接口名称及跨仓定义/引用候选；
 - include/import、包依赖、构建依赖、submodule 和 manifest；
 - RPC、OpenAPI、Protobuf、消息主题、共享数据结构和配置键；
 - 服务调用、驱动—内核—固件边界及生成代码来源；
 - ADR、方案文档、Issue/PR 与具体代码变更之间的显式引用；
 - 工程师审核后的 `depends_on`、`implements`、`replaces`、`compatible_with` 等人工关系。
 
-跨仓边由“静态分析事实、构建事实、接口契约、AI 推断、人工确认”五种来源产生，必须记录来源和置信级别。AI 推断边不能自动升级为代码事实。
+跨仓边由“源码直接事实、源码静态推断、接口契约、AI 推断、人工确认”五种来源产生，必须记录来源和置信级别。AI 推断边不能自动升级为代码事实。
 
 物理存储可以继续共用 PostgreSQL 表和向量索引，但每条记录都要包含 `repository_id`、`snapshot_id` 和 ACL；方案只是一层可版本化的查询视图，不能通过建立一个无权限隔离的“大总库”实现。
 
@@ -192,10 +193,10 @@ observed -> proposed -> mechanically_validated -> human_reviewed -> published
 ```text
 repository_id + snapshot_id + blob_sha + byte_range
 logical_symbol_id? + indexer_symbol_id? + ast_anchor?
-display_path + display_lines + build_profile
+display_path + display_lines + source_conditions?
 ```
 
-代码更新时先通过 blob、逻辑符号和 AST anchor 尝试重新定位；仅移动或格式化成功重定位后不应直接把知识标记为 stale。`logical_symbol_id` 与 SCIP 等索引器的版本化 symbol 分离，并通过签名、父级符号、路径和 rename/copy 信息做跨 commit 映射。
+代码更新时先通过 blob、逻辑符号和 AST anchor 尝试重新定位；仅移动或格式化成功重定位后不应直接把知识标记为 stale。`logical_symbol_id` 与任一解析器的版本化 symbol 分离，并通过签名、父级符号、路径和 rename/copy 信息做跨 commit 映射。
 
 ## 6. 代码扫描与更新流水线
 
@@ -205,15 +206,15 @@ display_path + display_lines + build_profile
 2. 应用包含/排除规则：忽略二进制、构建产物、依赖镜像和超大文件。
 3. 识别语言、目录、构建系统、README、设计文档、Kconfig/Makefile 等关键文件。
 4. 用 Tree-sitter 生成稳定的语法块和基础符号。
-5. 对 C/C++ 使用经过校验的 `compile_commands.json` 驱动 scip-clang，提取定义、引用、实现和外部符号。
-6. 组合 Clang AST、SCIP occurrence 和 Tree-sitter 生成静态调用候选；函数指针、宏和动态注册关系保留不确定性。
+5. 直接扫描标识符、声明、include/import、Kconfig/Kbuild 与调用表达式，以作用域、签名、链接属性和路径生成定义/引用/调用候选。
+6. 对函数指针、宏、条件编译和动态注册关系保留候选集合、条件表达式与置信度，不输出虚假的唯一关系。
 7. 生成文件级、符号级、模块级摘要；所有 claim 绑定稳定引用和输入 artifact 哈希。
 8. 生成 embedding，并写入带 `snapshot_id`、模型版本和安全域的向量记录。
 9. 构建全文/标识符索引，发布新的 snapshot；发布过程原子切换。
 
-索引 worker 必须运行在无默认出网、只读源码、限制 CPU/内存/磁盘的沙箱中。不得因为仓库提供了构建脚本就直接执行；需要构建生成文件时，只运行管理员审核和固定镜像中的受控 recipe。
+索引 worker 必须运行在无默认出网、只读源码、限制 CPU/内存/磁盘的沙箱中。不得执行仓库提供的构建脚本、生成器或任意代码；索引输入只来自 Git 对象和静态文件。
 
-内核类仓库需要额外保存“构建画像”，例如架构、编译器、配置文件和宏定义。相同 commit 在不同配置下可能产生不同可见符号，不能只保留一个无配置的抽象视图。但也不能为所有 Kconfig 组合建立完整索引：第一阶段只索引发布配置和高频配置，其余关系尽量保存条件表达式，在查询时明确当前覆盖率。
+内核类仓库不选择并编译某个配置，而是直接把 `#if`、Kconfig 依赖、Kbuild 目录/目标条件保存为关系属性。同一 commit 下可能存在的多个配置视图共用一份源码索引；查询时根据用户给出的架构或配置条件过滤，未提供条件时明确展示歧义和覆盖率。
 
 ### 6.2 Git 增量更新
 
@@ -243,14 +244,14 @@ MCP 上下文模式只能可靠记录检索 trace，通常看不到客户端最�
 
 ### 7.1 查询路由
 
-1. 将输入解析成显式 `scope={type: repository|solution, id, revision, build_profile?}`；缺失或歧义时返回候选范围，不默认拼接最新分支。
+1. 将输入解析成显式 `scope={type: repository|solution, id, revision, source_conditions?}`；缺失或歧义时返回候选范围，不默认拼接最新分支。
 2. 如果指定方案，解析对应 `solution_snapshot`，得到一致的仓库与版本集合。
 3. 如果存在 `workspace_overlay`，校验其 base snapshot、权限和有效期，并把 PR/分支/本地 diff 置于正式 snapshot 之上。
 4. 先做方案级路由：根据术语、接口、模块和关系图选出候选仓库，避免对所有仓库无差别搜索。
 5. 若包含精确标识符，优先符号和全文检索。
 6. 在候选仓库内并行执行：
    - Zoekt 的全文/正则/标识符检索（ripgrep 仅保留为评测 baseline 和故障诊断工具）；
-   - SCIP 的定义、引用、实现关系和内部生成的调用候选扩展；
+   - 直接扫描产生的定义、引用候选、include/Kconfig/Kbuild 与调用候选扩展；
    - pgvector 语义检索；
    - 已发布团队知识检索。
 7. 沿跨仓关系图做有限深度扩展，例如从 API 声明找到实现仓，再找到调用仓。
@@ -373,10 +374,10 @@ MCP 上下文模式只能可靠记录检索 trace，通常看不到客户端最�
 | 语义模型候选 | Qwen3-Embedding-0.6B + Qwen3-Reranker-0.6B | 可本地部署，覆盖代码和多语言；小模型适合先测成本收益 | 只有黄金集证明增益后进入 MVP；否则保留接口、不启用 |
 | 精确检索 | ripgrep 评测 baseline；Zoekt 正式通道 | baseline 简单可复现；Zoekt 面向代码提供 trigram、正则、符号信号和多仓搜索 | Zoekt 无法满足 ACL 后过滤召回或运维要求时重新评估 |
 | 语法解析 | Tree-sitter | 多语言、增量、适合结构化切块 | 保持为通用 fallback |
-| 精确代码智能 | SCIP + scip-clang | C/C++ 跨文件定义/引用更可靠 | 按语言增加 SCIP indexer |
+| 源码关系索引 | Tree-sitter + 自研标识符/include/Kconfig/Kbuild 提取器 | 无需编译即可覆盖大仓和快速更新；所有推断关系显式携带置信度 | 黄金集证明需要时增加新的 source-only parser |
 | Git 数据 | 本地 bare mirror + 对象存储备份 | commit 可复现，增量 fetch 快 | 多节点时共享对象存储/缓存 |
 | 异步任务 | Redis + Dramatiq | 部署简单，支持重试 | 长流程/复杂恢复时评估 Temporal |
-| 索引隔离 | 固定容器镜像 + 网络/资源策略 | 源仓库和构建输入不可信 | 高安全环境采用 microVM/独立 worker 池 |
+| 索引隔离 | 固定容器镜像 + 网络/资源策略 | 源仓库内容不可信 | 高安全环境采用 microVM/独立 worker 池 |
 | Web 控制台 | React/Next.js | 管理、审核和可观测性生态成熟 | 无需前期复杂化 |
 | 认证 | OIDC；PoC GitHub OAuth | 兼容团队 SSO | 对接公司 IdP 与仓库 ACL |
 | 可观测性 | OpenTelemetry + Prometheus/Grafana | 统一追踪检索和索引质量 | 从第一版保留 trace_id |
@@ -388,9 +389,9 @@ Embedding、reranker 和生成模型通过 provider interface 配置，不写死
 
 | 项目 | 对应组件 | 复用方式 | MVP 决策 |
 | --- | --- | --- | --- |
-| [Tree-sitter](https://github.com/tree-sitter/tree-sitter) | C3 Code Intelligence | 结构化 chunk、语言识别、SCIP 缺失时降级 | 直接依赖 |
-| [SCIP](https://github.com/scip-code/scip) | C3 Code Intelligence | 采用定义/引用/实现的数据语义和序列化格式 | 直接依赖 |
-| [scip-clang](https://github.com/sourcegraph/scip-clang) | C3 Code Intelligence | 从 compilation database 生成 C/C++/CUDA 精确索引 | 直接依赖，先验证目标内核仓库 |
+| [Tree-sitter](https://github.com/tree-sitter/tree-sitter) | C3 Code Intelligence | 结构化 chunk、定义/声明/调用表达式与条件节点 | 直接依赖 |
+| SCIP | C3 可选互操作 | 仅参考定义/引用/实现的数据语义；未来可导出 source-only 结果 | 不进入首版运行依赖 |
+| scip-clang | C3 对照方案 | 记录其编译数据库依赖与精度边界 | 与“禁止依赖编译”的约束冲突，不采用 |
 | [Zoekt](https://github.com/sourcegraph/zoekt) | C4 Lexical Search、C7 Retrieval | 建正式 trigram 代码索引，通过内部 JSON/gRPC adapter 查询 | Phase 0B 直接依赖；不承担权限和知识治理 |
 | [pgvector](https://github.com/pgvector/pgvector) | C5 Semantic Index、C6 Store | 保存 embedding 并参与混合检索 | 直接依赖 |
 | [Qwen3 Embedding](https://github.com/QwenLM/Qwen3-Embedding) | C5 Semantic Index | 0.6B embedding/reranker 作为本地评测候选 | 条件依赖；黄金集达标后启用 |
@@ -401,13 +402,13 @@ Embedding、reranker 和生成模型通过 provider interface 配置，不写死
 | [OpenGrok](https://github.com/oracle/opengrok) | 搜索对照 | 作为源码搜索质量基准 | 仅备选，不进入首版运行时 |
 | [Microsoft GraphRAG](https://github.com/microsoft/graphrag) | 后期文档研究 | 评估设计文档的主题与实体关系 | Phase 2 后研究；不生成代码调用关系 |
 
-Sourcegraph 完整平台是重要产品参考，但其公开仓库已经转为迁移前快照，且许可证结构需逐文件确认；更稳妥的做法是复用独立、许可证清晰的 SCIP、scip-clang、Zoekt，而不是 fork 整个平台。
+Sourcegraph 完整平台是重要产品参考，但不作为基础平台；首版只复用符合直接扫描约束的 Tree-sitter 与 Zoekt，代码关系模型由项目自行实现。
 
 ## 12. 分阶段实施
 
 ### Phase 0A：评测基线
 
-- 选择一个真实 C/C++ 或内核仓库、一个固定 commit 和一个 build profile。
+- 选择一个真实 C/C++ 或内核仓库和一个固定 commit；不准备构建环境。
 - 收集 30～50 个历史真实问题，标注关键文件、符号、版本和“无法回答”负样本。
 - 用 ripgrep/全文搜索建立最小 lexical baseline，不接 AI 客户端、不生成团队知识。
 
@@ -415,7 +416,7 @@ Sourcegraph 完整平台是重要产品参考，但其公开仓库已经转为�
 
 ### Phase 0B：结构化检索 PoC
 
-- 加入 Tree-sitter、SCIP/scip-clang、Zoekt、pgvector 和稳定 citation。
+- 加入 Tree-sitter、源码标识符/关系提取器、Zoekt、pgvector 和稳定 citation。
 - 比较 lexical、纯向量、lexical+向量、lexical+向量+符号四组方案。
 - 输出只读 Context Pack 和完整 retrieval trace。
 
@@ -431,7 +432,7 @@ Sourcegraph 完整平台是重要产品参考，但其公开仓库已经转为�
 
 - 发布 `/mcp/read`，接入 Cursor 和 Claude Code。
 - 提供 scope resolve、context search/get、trace 和严格输出预算。
-- 支持固定 snapshot、手工 solution snapshot 和受控 build profile。
+- 支持固定 snapshot、手工 solution snapshot 和可选的源码条件过滤。
 
 ### Phase 1B：团队安全试点
 
@@ -455,7 +456,7 @@ Sourcegraph 完整平台是重要产品参考，但其公开仓库已经转为�
 ### Phase 3：规模化
 
 - 多节点 worker、索引分片、冷热 snapshot、对象存储和灾难恢复。
-- 更多 SCIP 语言索引器、跨仓依赖图和运行时 evidence。
+- 更多 source-only 语言解析器、跨仓依赖图和运行时 evidence。
 - 企业 SSO、审计导出、数据保留、合规策略和安全域隔离部署。
 
 ## 13. 质量指标
@@ -464,7 +465,7 @@ Sourcegraph 完整平台是重要产品参考，但其公开仓库已经转为�
 
 - **Evidence Recall@K**：标准问题所需的关键代码是否进入 Context Pack。
 - **Citation Precision**：托管回答或已回传回答中的引用是否真正支持对应 claim。
-- **Version Accuracy**：回答使用的 commit/build profile 是否正确。
+- **Version Accuracy**：回答使用的 repository/solution commit 集合是否正确。
 - **Grounded Answer Rate**：仅对系统能观察到最终回答的托管/回传模式计算。
 - **Unknown Precision**：证据不足时是否正确选择不确定，而非编造。
 - **Gap Closure Time**：高频 gap 从发现到发布知识的时间。
@@ -483,13 +484,13 @@ Sourcegraph 完整平台是重要产品参考，但其公开仓库已经转为�
 | --- | --- |
 | AI 生成摘要污染知识 | 提案/发布分离；来源、审核和 stale 状态强制存在 |
 | 代码变更后引用失效 | commit 固定、内容哈希校验、增量失效传播 |
-| C/C++ 宏和构建配置导致索引不准 | 保存 build profile，使用真实 compilation database，Tree-sitter 只作为降级 |
-| SCIP 无法直接提供完整调用图 | 独立提取调用候选并记录来源/置信度；动态关系不冒充静态事实 |
+| C/C++ 宏和条件编译导致关系不唯一 | 静态解析条件表达式，保存候选集合、来源、置信度和覆盖率；不编译单一配置来掩盖歧义 |
+| source-only 分析无法提供完整调用图 | 独立提取调用候选并记录来源/置信度；动态关系不冒充静态事实 |
 | 跨仓回答混用了不兼容版本 | 以 solution snapshot 冻结版本集合；无一致版本时显式拒绝确定性回答 |
 | 大仓库结果淹没关键小仓库 | 先做方案级仓库路由，再分仓召回和跨仓统一重排 |
 | 私有代码越权或发送给未批准模型 | 用户级认证、数据库 RLS、安全域分区、数据出域策略、缓存隔离和审计 |
 | 仓库内容触发 Prompt Injection | 内容按不可信数据隔离；工具最小权限；高风险写操作不向不支持确认的客户端开放 |
-| 恶意仓库或构建脚本攻击索引器 | 固定镜像、只读沙箱、默认禁网、受控 build recipe 和资源限制 |
+| 恶意仓库内容攻击索引器 | 固定镜像、只读沙箱、默认禁网、绝不执行仓库脚本并限制资源 |
 | MCP 客户端认证能力不一致 | read/write 端点分离；兼容矩阵；云端 agent 使用只读短期凭据 |
 | 客户端生成的最终答案不可见 | 上下文模式只评测检索；托管/回传模式承担回答评测与学习闭环 |
 | 开发分支与本地修改未进入知识库 | workspace overlay 叠加在固定 base snapshot 上并短期保存 |
@@ -510,7 +511,7 @@ AIKnowledge/
   packages/
     domain/              # 核心实体与状态机
     connectors/          # GitHub/GitLab/Git
-    indexers/            # tree-sitter/SCIP adapters
+    indexers/            # tree-sitter/source relation adapters
     retrieval/           # hybrid retrieval/rerank/context pack
     auth/                # OIDC + ACL
     policy/              # 数据出域、保留、客户端能力策略
@@ -529,7 +530,7 @@ AIKnowledge/
 
 ## 16. 下一步
 
-下一步不应该立刻做完整 Web 平台，而是完成 Phase 0A/0B：确定一个目标代码仓库、一个可复现 build profile 和 30～50 个真实问题，先建立 ripgrep lexical baseline，再接入 Tree-sitter、SCIP/scip-clang 与 Zoekt，测量结构化混合检索的 Evidence Recall@K。架构组件、开源复用边界和技术理由见 [技术蓝图](technical-blueprint.md)，具体任务、依赖和验收条件见 [实施计划](implementation-plan.md)。
+当前已经完成固定版本、ripgrep baseline、Tree-sitter、source-only 关系、blob 分析缓存和一层有界依赖扩展。下一步先定义 Context Pack v1 与 retrieval trace 的稳定契约，再让 Zoekt、symbol/vector 通道和跨仓路由作为可替换召回器接入；这样 AI 客户端不依赖底层索引实现。问题集按当前决定暂时保留但暂停复核，等 Context Pack 可运行后恢复 Evidence Recall@K 对比。架构约束见 [ADR-0001](decisions/0001-source-only-indexing.md)，组件映射和任务见技术蓝图及实施计划。
 
 ## 17. 调研依据
 
@@ -539,7 +540,7 @@ AIKnowledge/
 - Cursor 支持 stdio、SSE、Streamable HTTP，并将远程 HTTP 定位为多人部署方式：[Cursor MCP documentation](https://docs.cursor.com/context/model-context-protocol)
 - Claude Code CLI 提供 `claude mcp` 管理 MCP 服务：[Claude Code CLI reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage)
 - GitHub Copilot cloud agent 只支持 MCP tools，当前不支持使用 OAuth 的远程 MCP，并会自主调用已配置工具：[GitHub Copilot MCP](https://docs.github.com/en/copilot/concepts/agents/cloud-agent/mcp-and-cloud-agent)
-- SCIP 是语言无关的代码索引协议，覆盖定义、引用和实现；scip-clang 为 C/C++/CUDA 提供基于 Clang 的精确索引：[SCIP](https://github.com/scip-code/scip)、[scip-clang](https://github.com/sourcegraph/scip-clang)
+- SCIP/scip-clang 仅作为调研对照；因 scip-clang 依赖 compilation database，不进入首版运行架构。
 - Tree-sitter 是增量解析系统，适合多语言语法结构提取：[Tree-sitter](https://github.com/tree-sitter/tree-sitter)
 - pgvector 官方支持 HNSW，并建议结合 PostgreSQL FTS、RRF 或 cross-encoder 实现混合检索：[pgvector](https://github.com/pgvector/pgvector)
 - pgvector 的近似索引会在扫描后应用过滤，多租户共享索引会影响召回与性能，需分区或隔离：[pgvector Filtering and Multitenancy](https://github.com/pgvector/pgvector#filtering)

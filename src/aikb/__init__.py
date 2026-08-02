@@ -1,3 +1,3 @@
-"""AIKnowledge evaluation prototype."""
+"""AIKnowledge versioned code-context prototype."""
 
 __version__ = "0.1.0"
