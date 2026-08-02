@@ -8,8 +8,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from aikb.catalog import Catalog, SearchHit
+from aikb.catalog import SearchHit
 from aikb.retrieval import ChannelContribution, retrieve_hybrid
+from aikb.storage import ReadCatalog
 
 
 CONTEXT_PACK_SCHEMA = "urn:aiknowledge:schema:context-pack:v1"
@@ -195,7 +196,7 @@ def _identifier_candidates(query: str, hits: list[SearchHit]) -> list[str]:
 
 
 def _build_symbol_contexts(
-    catalog: Catalog,
+    catalog: ReadCatalog,
     query: str,
     hits: list[SearchHit],
     repository: str | None,
@@ -271,7 +272,7 @@ def _contribution_models(
 
 
 def build_context_pack(
-    catalog: Catalog,
+    catalog: ReadCatalog,
     query: str,
     repository: str | None = None,
     snapshot_id: str | None = None,

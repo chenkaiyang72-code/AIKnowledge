@@ -1,0 +1,39 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-and-postgres:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg17-bookworm
+        env:
+          POSTGRES_USER: aikb
+          POSTGRES_PASSWORD: aikb
+          POSTGRES_DB: aikb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aikb -d aikb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AIKB_TEST_POSTGRES_URL: postgresql+psycopg://aikb:aikb@127.0.0.1:5432/aikb
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project
+        run: python -m pip install -e ".[postgres]"
+      - name: Run tests
+        run: python -B -m unittest discover -s tests -v

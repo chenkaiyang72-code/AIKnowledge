@@ -2,7 +2,7 @@
 
 最后更新：2026-08-02<br>
 当前阶段：Phase 0B 本地知识库启动骨架（进行中）<br>
-当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立不可变本地 snapshot、Tree-sitter C 结构化 chunk、source-only 关系、有界依赖扩展、Context Pack v1.1 和 lexical/symbol/relation RRF。整个索引链路不编译源码；下一步接入正式 Zoekt lexical adapter，并把 catalog 领域模型迁移到 PostgreSQL。
+当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立 source-only 本地索引、Context Pack v1.1、lexical/symbol/relation RRF，以及 PostgreSQL/pgvector schema v1/Alembic migration。整个索引链路不编译源码；当前等待 PostgreSQL 17 CI 集成验证，之后实现 PostgreSQL adapter 和正式 Zoekt lexical adapter。
 
 ## 维护规则
 
@@ -105,6 +105,10 @@
 - 已消除 symbol/relation 反查 FTS5 虚表的性能问题：改为从压缩 blob 按 chunk 行范围读取，并增加 chunk/relation 索引；真实混合检索从约 8.3 秒降到约 0.38 秒，完整 Context Pack 约 0.97 秒。
 - 真实 Context Pack v1.1 为 `context_8f20640aa1d2f62501cdb7ec`，trace 为 `trace_5c4ec50ca3e25a95b4b186d6`；第一条 `core.c:7961-8027` 同时得到三个通道支持。
 - 自动化测试覆盖 schema 严格性、确定性、citation 回查、预算截断、unknown/gap、精确符号提升、关系召回和 RRF 稳定性；现为 20 个并全部通过。
+- 已定义 `ReadCatalog` Protocol，Context Pack/RRF 不再依赖 SQLite 具体类型，为 PostgreSQL/Zoekt adapter 固定边界。
+- 已实现 PostgreSQL/pgvector schema v1：15 张业务表覆盖不可变 snapshot、内容寻址 blob、代码结构、embedding model/vector 和最小 retrieval trace；每仓唯一 active snapshot 由 partial unique index 强制。
+- 已建立 Alembic `0001_postgres_schema_v1` 和 `postgres` optional dependencies；使用 Psycopg binary 与预装 pgvector 镜像，不在开发机或 CI 编译数据库组件。
+- 本地 metadata/离线 DDL 验证通过；自动化测试现为 23 个，其中 21 个通过，2 个 PostgreSQL 集成测试因本机无服务按设计跳过。GitHub Actions PostgreSQL 17 实际 migration/约束验证待本次提交后运行。
 
 ## 3. 还未完成的计划
 
@@ -116,14 +120,14 @@
 
 | 优先级 | 未完成事项 | 下一动作 | 完成条件 |
 | --- | --- | --- | --- |
-| P0 | 建立 PostgreSQL schema | 把当前领域约束落成 PostgreSQL migration | 本地 Compose 环境可重复创建并通过约束测试 |
+| P0 | 完成 PostgreSQL CI 验证并实现 adapter | GitHub Actions 应用 migration；随后实现 read/write adapter 和原子发布事务 | 真实 PostgreSQL 上 migration、唯一 active 约束、幂等 ingest 和查询通过 |
 | P0 | 接入正式 Zoekt lexical adapter | 定义 provider interface，以 Zoekt 替换 FTS5 lexical 通道并保留回退 | `kb-retrieve`/Context Pack schema 不变，Zoekt 结果进入相同 RRF trace |
 | P1 | 增加 vector 通道并恢复评测 | 先接 pgvector，再用真实问题决定 embedding/reranker | Evidence Recall/MRR 有可复现提升，否则不启用模型 |
 | P1 | 扩大 source-only 规则覆盖 | 完善复杂 Kconfig/Kbuild 变量、更多语言 import 和注册模式 | 未解析/歧义统计可解释，并由真实问题决定规则优先级 |
 
 当前 SQLite 骨架已经实现 repository/snapshot/blob/file/chunk 的本地持久化，但以下仍未完成：
 
-- 尚未部署 PostgreSQL 和 pgvector。
+- PostgreSQL schema/migration 已实现但本机未部署；GitHub Actions 集成验证和运行时 adapter 尚未完成。
 - Kconfig/Kbuild 第一版规则只覆盖常见语法，复杂变量展开和跨文件条件仍需扩展。
 - C header 声明与 C implementation 定义尚未做受约束的 logical symbol 归并；不能仅按同名强制合并，否则配置互斥实现或多个定义会被错误标成唯一目标。
 - 尚未部署 Zoekt 正式代码文本索引。
@@ -154,12 +158,13 @@
 | 6 | 实现依赖引导的范围扩展 | Codex | 有界依赖发现、解析统计、snapshot profile | 已完成，46 个种子扩展到 218 个文件且歧义率下降 |
 | 7 | 输出 Context Pack v1 | Codex | evidence、citation、snapshot、trace、预算 | 已完成，真实 Linux 快照和 unknown 查询验证通过 |
 | 8 | 建立 retriever 接口与本地 lexical/symbol/relation RRF | Codex | 通道契约、统一候选、RRF、分通道 trace | 已完成，`init_idle` 定义由第 4 提升到第 1 |
-| 9 | 建立 PostgreSQL/pgvector 环境并接入 Zoekt | Codex + 用户安装基础设施 | migration、正式 lexical index、健康检查 | 相同 schema 通过约束测试且全文结果可统一召回 |
-| 10 | 恢复评测问题集 | Codex + 用户 | 证据复核、负样本和黄金集 | 用真实问题验证 Phase 0B 是否达标 |
+| 9 | 建立 PostgreSQL/pgvector schema 与 migration | Codex | provider boundary、15 表 metadata、Alembic、CI service | 已实现，本地离线验证通过；GitHub Actions 集成结果待确认 |
+| 10 | 实现 PostgreSQL adapter 并接入 Zoekt | Codex | read/write adapter、原子发布、正式 lexical index、健康检查 | PostgreSQL ingest/query 与 Context Pack 端到端通过 |
+| 11 | 恢复评测问题集 | Codex + 用户 | 证据复核、负样本和黄金集 | 用真实问题验证 Phase 0B 是否达标 |
 
 ### 现在立即要做的动作
 
-下一项开发工作是定义正式 storage/retriever provider 边界，并把当前 schema 落成 PostgreSQL migration；随后接入 Zoekt 作为 lexical adapter，SQLite FTS5 保留为 bootstrap/回退。Zoekt 和 PostgreSQL 都只能消费已扫描的静态源码与派生产物，不得执行仓库构建。完成后恢复现有问题集的自动评测，人工证据复核仍可继续暂停。
+下一项动作是提交 migration 和 CI workflow，让 PostgreSQL 17 + pgvector 服务实际执行 upgrade/约束测试；CI 通过后立刻实现 PostgreSQL read/write adapter 和 snapshot 原子发布事务，再接入 Zoekt lexical adapter。所有 adapter 只能消费静态扫描产物，不得执行仓库构建。完成正式检索后恢复现有问题集的自动评测，人工证据复核仍可继续暂停。
 
 ## 相关文档
 
@@ -171,3 +176,4 @@
 - [Phase 0B 本地知识库启动骨架](phase-0b-bootstrap.md)
 - [Context Pack v1](context-pack-v1.md)
 - [本地混合检索 v1](hybrid-retrieval.md)
+- [PostgreSQL/pgvector schema v1](postgres-schema-v1.md)

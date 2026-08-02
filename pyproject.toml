@@ -13,6 +13,14 @@ dependencies = [
   "tree-sitter-c==0.24.2",
 ]
 
+[project.optional-dependencies]
+postgres = [
+  "SQLAlchemy==2.0.51",
+  "alembic==1.18.5",
+  "pgvector==0.5.0",
+  "psycopg[binary]==3.3.4",
+]
+
 [project.scripts]
 aikb = "aikb.cli:main"
 aikb-eval = "aikb.evaluation:main"

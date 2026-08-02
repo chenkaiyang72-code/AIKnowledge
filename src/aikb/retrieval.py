@@ -4,7 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from aikb.catalog import Catalog, SearchHit
+from aikb.catalog import SearchHit
+from aikb.storage import ReadCatalog
 
 
 RetrievalChannel = Literal["lexical_fts5", "symbol_exact", "relation_source"]
@@ -55,7 +56,7 @@ def extract_identifier_terms(query: str) -> list[str]:
 
 
 def retrieve_hybrid(
-    catalog: Catalog,
+    catalog: ReadCatalog,
     query: str,
     top_k: int = 20,
     repository: str | None = None,
