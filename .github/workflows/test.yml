@@ -27,7 +27,8 @@ jobs:
           --health-retries 10
     env:
       AIKB_TEST_POSTGRES_URL: postgresql+psycopg://aikb:aikb@127.0.0.1:5432/aikb
-      ZOEKT_IMAGE: ghcr.io/sourcegraph/zoekt:latest
+      ZOEKT_IMAGE: >-
+        ghcr.io/sourcegraph/zoekt@sha256:0bf4af966897c2fd493e2b0826440e17d5640e8c4d8579c7e5cac28f084da75a
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -47,6 +48,7 @@ jobs:
         run: |
           docker pull "$ZOEKT_IMAGE"
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
             -v "$AIKB_TEST_ZOEKT_ROOT:/fixture" \
             "$ZOEKT_IMAGE" \
             zoekt-index \
@@ -56,6 +58,7 @@ jobs:
             /fixture/export/source
           docker run --rm -d \
             --name aikb-zoekt-ci \
+            --user "$(id -u):$(id -g)" \
             -p 6070:6070 \
             -v "$AIKB_TEST_ZOEKT_ROOT/index:/data/index:ro" \
             "$ZOEKT_IMAGE" \

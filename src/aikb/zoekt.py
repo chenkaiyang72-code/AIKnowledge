@@ -265,6 +265,7 @@ def export_snapshot_for_zoekt(
         tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=output.parent)
     ).resolve()
     try:
+        temporary.chmod(0o755)
         source = temporary / "source"
         source.mkdir()
         byte_count = 0
