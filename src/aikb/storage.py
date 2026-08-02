@@ -1,12 +1,35 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol
 
 from aikb.catalog import SearchHit
 
 
+LexicalChannel = Literal[
+    "lexical_fts5",
+    "lexical_postgres_fts",
+    "lexical_zoekt",
+]
+
+
+@dataclass(frozen=True)
+class LexicalSearchResult:
+    channel: LexicalChannel
+    hits: tuple[SearchHit, ...]
+
+
+@dataclass(frozen=True)
+class SourceLocation:
+    repository: str
+    snapshot_id: str
+    path: str
+    line: int
+    rank: float
+
+
 class ReadCatalog(Protocol):
-    """Read-side contract shared by SQLite and future PostgreSQL adapters."""
+    """Read-side contract shared by SQLite and PostgreSQL adapters."""
 
     def resolve_snapshots(
         self,
@@ -20,6 +43,20 @@ class ReadCatalog(Protocol):
         top_k: int = 10,
         repository: str | None = None,
         snapshot_id: str | None = None,
+    ) -> list[SearchHit]: ...
+
+    def search_lexical(
+        self,
+        query: str,
+        top_k: int = 10,
+        repository: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> LexicalSearchResult: ...
+
+    def resolve_location_chunks(
+        self,
+        locations: list[SourceLocation],
+        top_k: int = 10,
     ) -> list[SearchHit]: ...
 
     def search_symbol_chunks(

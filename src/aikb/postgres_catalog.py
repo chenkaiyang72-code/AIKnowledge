@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import Engine, bindparam, create_engine, text
 
 from aikb.catalog import SearchHit
+from aikb.storage import LexicalSearchResult, SourceLocation
 
 
 class PostgresCatalog:
@@ -138,6 +139,69 @@ class PostgresCatalog:
             hits.append(self._hit(row, -float(row["lexical_rank"])))
             if len(hits) >= top_k:
                 break
+        return hits
+
+    def search_lexical(
+        self,
+        query: str,
+        top_k: int = 10,
+        repository: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> LexicalSearchResult:
+        return LexicalSearchResult(
+            channel="lexical_postgres_fts",
+            hits=tuple(
+                self.search(
+                    query=query,
+                    top_k=top_k,
+                    repository=repository,
+                    snapshot_id=snapshot_id,
+                )
+            ),
+        )
+
+    def resolve_location_chunks(
+        self,
+        locations: list[SourceLocation],
+        top_k: int = 10,
+    ) -> list[SearchHit]:
+        if top_k < 1 or top_k > 100:
+            raise ValueError("top-k must be between 1 and 100")
+        statement = text(
+            "SELECT c.id AS chunk_id, f.blob_id, c.content_hash, "
+            "r.name AS repository, s.id AS snapshot_id, s.revision, f.path, "
+            "c.start_line, c.end_line, c.kind, c.symbol, c.generator, c.content "
+            "FROM chunk c JOIN source_file f ON f.id=c.file_id "
+            "JOIN snapshot s ON s.id=c.snapshot_id "
+            "JOIN repository r ON r.id=s.repository_id "
+            "WHERE r.name=:repository AND s.id=:snapshot_id AND f.path=:path "
+            "AND c.start_line<=:line AND c.end_line>=:line "
+            "ORDER BY (c.end_line-c.start_line),c.ordinal LIMIT 1"
+        )
+        hits: list[SearchHit] = []
+        seen: set[tuple[str, str]] = set()
+        with self.engine.connect() as connection:
+            for location in locations:
+                if location.line < 1:
+                    continue
+                row = connection.execute(
+                    statement,
+                    {
+                        "repository": location.repository,
+                        "snapshot_id": location.snapshot_id,
+                        "path": location.path,
+                        "line": location.line,
+                    },
+                ).mappings().first()
+                if row is None:
+                    continue
+                key = (row["snapshot_id"], row["chunk_id"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                hits.append(self._hit(row, location.rank))
+                if len(hits) >= top_k:
+                    break
         return hits
 
     def _named_chunk_search(

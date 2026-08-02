@@ -15,6 +15,7 @@ KNOWLEDGE_COMMANDS = {
     "kb-context",
     "kb-context-schema",
     "kb-publish-postgres",
+    "kb-zoekt-export",
 }
 
 
@@ -35,6 +36,7 @@ def main(argv: list[str] | None = None) -> int:
             "  kb-context    build a budgeted Context Pack with retrieval trace\n"
             "  kb-context-schema  print Context Pack v1 JSON Schema\n\n"
             "  kb-publish-postgres  atomically publish a snapshot to PostgreSQL\n\n"
+            "  kb-zoekt-export  materialize an immutable snapshot for Zoekt\n\n"
             "Run 'python -m aikb <command> --help' for command options."
         )
         return 0

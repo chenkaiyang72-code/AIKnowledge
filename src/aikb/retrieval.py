@@ -5,14 +5,16 @@ from dataclasses import dataclass
 from typing import Literal
 
 from aikb.catalog import SearchHit
-from aikb.storage import ReadCatalog
+from aikb.storage import LexicalChannel, ReadCatalog
 
 
-RetrievalChannel = Literal["lexical_fts5", "symbol_exact", "relation_source"]
+RetrievalChannel = LexicalChannel | Literal["symbol_exact", "relation_source"]
 RRF_K = 60
 MAX_IDENTIFIER_TERMS = 16
 CHANNEL_WEIGHTS: dict[RetrievalChannel, float] = {
     "lexical_fts5": 1.0,
+    "lexical_postgres_fts": 1.0,
+    "lexical_zoekt": 1.0,
     "symbol_exact": 2.0,
     "relation_source": 0.75,
 }
@@ -69,13 +71,14 @@ def retrieve_hybrid(
         raise ValueError("top-k must be between 1 and 100")
 
     identifiers = extract_identifier_terms(normalized_query)
+    lexical_result = catalog.search_lexical(
+        normalized_query,
+        top_k=top_k,
+        repository=repository,
+        snapshot_id=snapshot_id,
+    )
     channel_hits: dict[RetrievalChannel, list[SearchHit]] = {
-        "lexical_fts5": catalog.search(
-            normalized_query,
-            top_k=top_k,
-            repository=repository,
-            snapshot_id=snapshot_id,
-        ),
+        lexical_result.channel: list(lexical_result.hits),
         "symbol_exact": catalog.search_symbol_chunks(
             identifiers,
             top_k=top_k,
@@ -94,7 +97,12 @@ def retrieve_hybrid(
         tuple[str, str], list[ChannelContribution]
     ] = {}
     scores_by_key: dict[tuple[str, str], float] = {}
-    for channel in ("lexical_fts5", "symbol_exact", "relation_source"):
+    channel_sequence: tuple[RetrievalChannel, ...] = (
+        lexical_result.channel,
+        "symbol_exact",
+        "relation_source",
+    )
+    for channel in channel_sequence:
         weight = CHANNEL_WEIGHTS[channel]
         for rank, hit in enumerate(channel_hits[channel], start=1):
             key = (hit.snapshot_id, hit.chunk_id)
@@ -111,7 +119,7 @@ def retrieve_hybrid(
             )
 
     channel_order = {
-        "lexical_fts5": 0,
+        lexical_result.channel: 0,
         "symbol_exact": 1,
         "relation_source": 2,
     }

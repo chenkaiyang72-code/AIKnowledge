@@ -27,6 +27,7 @@ jobs:
           --health-retries 10
     env:
       AIKB_TEST_POSTGRES_URL: postgresql+psycopg://aikb:aikb@127.0.0.1:5432/aikb
+      ZOEKT_IMAGE: ghcr.io/sourcegraph/zoekt:latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -37,5 +38,38 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Install project
         run: python -m pip install -e ".[postgres]"
+      - name: Prepare immutable Zoekt fixture
+        run: >-
+          python -B tests/prepare_zoekt_fixture.py
+          --root "$RUNNER_TEMP/aikb-zoekt"
+          --env-file "$GITHUB_ENV"
+      - name: Index fixture and start Zoekt
+        run: |
+          docker pull "$ZOEKT_IMAGE"
+          docker run --rm \
+            -v "$AIKB_TEST_ZOEKT_ROOT:/fixture" \
+            "$ZOEKT_IMAGE" \
+            zoekt-index \
+            -index /fixture/index \
+            -meta /fixture/export/zoekt.meta.json \
+            -disable_ctags \
+            /fixture/export/source
+          docker run --rm -d \
+            --name aikb-zoekt-ci \
+            -p 6070:6070 \
+            -v "$AIKB_TEST_ZOEKT_ROOT/index:/data/index:ro" \
+            "$ZOEKT_IMAGE" \
+            zoekt-webserver -index /data/index -rpc -listen :6070
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:6070/healthz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs aikb-zoekt-ci
+          exit 1
       - name: Run tests
         run: python -B -m unittest discover -s tests -v
+      - name: Stop Zoekt
+        if: always()
+        run: docker rm -f aikb-zoekt-ci || true

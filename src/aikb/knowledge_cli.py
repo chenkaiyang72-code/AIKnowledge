@@ -21,6 +21,18 @@ from aikb.retrieval import retrieve_hybrid
 DEFAULT_DATABASE = Path(".aikb/catalog.db")
 
 
+def _add_zoekt_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--zoekt-url",
+        help="Zoekt webserver base URL; defaults to AIKB_ZOEKT_URL",
+    )
+    parser.add_argument(
+        "--zoekt-required",
+        action="store_true",
+        help="fail when Zoekt is unavailable instead of using catalog FTS",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="AIKnowledge Phase 0B local knowledge-base CLI"
@@ -77,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--top-k", type=int, default=10)
     search_parser.add_argument("--repository")
     search_parser.add_argument("--snapshot-id")
+    _add_zoekt_options(search_parser)
 
     retrieve_parser = subparsers.add_parser(
         "kb-retrieve",
@@ -87,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     retrieve_parser.add_argument("--top-k", type=int, default=10)
     retrieve_parser.add_argument("--repository")
     retrieve_parser.add_argument("--snapshot-id")
+    _add_zoekt_options(retrieve_parser)
 
     symbol_parser = subparsers.add_parser(
         "kb-symbol",
@@ -110,6 +124,15 @@ def build_parser() -> argparse.ArgumentParser:
     context_parser.add_argument("--evidence-token-budget", type=int, default=3_000)
     context_parser.add_argument("--max-symbols", type=int, default=5)
     context_parser.add_argument("--max-relations-per-symbol", type=int, default=8)
+    _add_zoekt_options(context_parser)
+
+    export_parser = subparsers.add_parser(
+        "kb-zoekt-export",
+        help="materialize an immutable validated snapshot for Zoekt indexing",
+    )
+    export_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE)
+    export_parser.add_argument("--snapshot-id")
+    export_parser.add_argument("--output", type=Path, required=True)
 
     publish_parser = subparsers.add_parser(
         "kb-publish-postgres",
@@ -138,6 +161,23 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         with Catalog(args.db) as catalog:
             catalog.initialize()
+            read_catalog = catalog
+            zoekt_url = getattr(args, "zoekt_url", None) or os.environ.get(
+                "AIKB_ZOEKT_URL"
+            )
+            if (
+                args.command in {"kb-search", "kb-retrieve", "kb-context"}
+                and zoekt_url
+            ):
+                from aikb.zoekt import ZoektClient, ZoektReadCatalog
+
+                read_catalog = ZoektReadCatalog(
+                    catalog,
+                    ZoektClient(zoekt_url),
+                    fallback_on_unavailable=not getattr(
+                        args, "zoekt_required", False
+                    ),
+                )
             if args.command == "kb-ingest":
                 scope = load_scope(args.scope)
                 report = ingest_source(
@@ -157,21 +197,23 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "kb-stats":
                 report = catalog.summary()
             elif args.command == "kb-search":
-                hits = catalog.search(
+                lexical_result = read_catalog.search_lexical(
                     query=args.query,
                     top_k=args.top_k,
                     repository=args.repository,
                     snapshot_id=args.snapshot_id,
                 )
+                hits = lexical_result.hits
                 report = {
                     "query": args.query,
+                    "channel": lexical_result.channel,
                     "top_k": args.top_k,
                     "result_count": len(hits),
                     "results": [hit.as_dict() for hit in hits],
                 }
             elif args.command == "kb-retrieve":
                 result = retrieve_hybrid(
-                    catalog=catalog,
+                    catalog=read_catalog,
                     query=args.query,
                     top_k=args.top_k,
                     repository=args.repository,
@@ -202,6 +244,14 @@ def main(argv: list[str] | None = None) -> int:
                     repository=args.repository,
                     snapshot_id=args.snapshot_id,
                 )
+            elif args.command == "kb-zoekt-export":
+                from aikb.zoekt import export_snapshot_for_zoekt
+
+                report = export_snapshot_for_zoekt(
+                    catalog,
+                    output=args.output,
+                    snapshot_id=args.snapshot_id,
+                ).as_dict()
             elif args.command == "kb-publish-postgres":
                 postgres_url = args.postgres_url or os.environ.get(
                     "AIKB_POSTGRES_URL"
@@ -228,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
                     engine.dispose()
             else:
                 report = build_context_pack(
-                    catalog=catalog,
+                    catalog=read_catalog,
                     query=args.query,
                     repository=args.repository,
                     snapshot_id=args.snapshot_id,

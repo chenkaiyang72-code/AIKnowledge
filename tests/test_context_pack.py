@@ -94,7 +94,7 @@ class ContextPackTests(unittest.TestCase):
             first.model_dump(mode="json"),
             second.model_dump(mode="json"),
         )
-        self.assertEqual(validated.schema_version, "1.1")
+        self.assertEqual(validated.schema_version, "1.2")
         self.assertGreaterEqual(len(first.evidence), 1)
         self.assertGreaterEqual(len(first.symbols), 1)
         self.assertEqual(first.symbols[0].name, "init_idle")
@@ -143,7 +143,7 @@ class ContextPackTests(unittest.TestCase):
         self.assertIn("schema_version", schema["required"])
         self.assertEqual(
             schema["properties"]["schema_version"]["const"],
-            "1.1",
+            "1.2",
         )
         self.assertIn("CodeEvidence", schema["$defs"])
 

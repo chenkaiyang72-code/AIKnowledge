@@ -6,7 +6,10 @@ import sqlite3
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from aikb.storage import LexicalSearchResult, SourceLocation
 
 
 SCHEMA_VERSION = 5
@@ -866,6 +869,74 @@ class Catalog:
                 continue
             per_file[key] = per_file.get(key, 0) + 1
             hits.append(self._search_hit_from_row(row, row["fts_rank"]))
+            if len(hits) >= top_k:
+                break
+        return hits
+
+    def search_lexical(
+        self,
+        query: str,
+        top_k: int = 10,
+        repository: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> LexicalSearchResult:
+        from aikb.storage import LexicalSearchResult
+
+        return LexicalSearchResult(
+            channel="lexical_fts5",
+            hits=tuple(
+                self.search(
+                    query=query,
+                    top_k=top_k,
+                    repository=repository,
+                    snapshot_id=snapshot_id,
+                )
+            ),
+        )
+
+    def resolve_location_chunks(
+        self,
+        locations: list[SourceLocation],
+        top_k: int = 10,
+    ) -> list[SearchHit]:
+        if top_k < 1 or top_k > 100:
+            raise ValueError("top-k must be between 1 and 100")
+        hits: list[SearchHit] = []
+        seen: set[tuple[str, str]] = set()
+        for location in locations:
+            if location.line < 1:
+                continue
+            row = self.connection.execute(
+                """
+                SELECT c.id AS chunk_id, f.blob_id, c.content_hash,
+                       r.name AS repository, s.id AS snapshot_id, s.revision,
+                       f.path, c.start_line, c.end_line, c.kind, c.symbol,
+                       c.generator, b.compressed_content
+                FROM chunk AS c
+                JOIN source_file AS f ON f.id = c.file_id
+                JOIN blob AS b ON b.id = f.blob_id
+                JOIN snapshot AS s ON s.id = c.snapshot_id
+                JOIN repository AS r ON r.id = s.repository_id
+                WHERE r.name = ? AND s.id = ? AND f.path = ?
+                  AND c.start_line <= ? AND c.end_line >= ?
+                ORDER BY (c.end_line - c.start_line), c.ordinal
+                LIMIT 1
+                """,
+                (
+                    location.repository,
+                    location.snapshot_id,
+                    location.path,
+                    location.line,
+                    location.line,
+                ),
+            ).fetchone()
+            if row is None:
+                continue
+            key = (row["snapshot_id"], row["chunk_id"])
+            if key in seen:
+                continue
+            seen.add(key)
+            hits.append(self._search_hit_from_row(row, location.rank))
             if len(hits) >= top_k:
                 break
         return hits

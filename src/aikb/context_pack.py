@@ -14,8 +14,8 @@ from aikb.storage import ReadCatalog
 
 
 CONTEXT_PACK_SCHEMA = "urn:aiknowledge:schema:context-pack:v1"
-CONTEXT_PACK_VERSION = "1.1"
-CONTEXT_BUILDER_VERSION = "context-pack-v1.1+hybrid-rrf-v1"
+CONTEXT_PACK_VERSION = "1.2"
+CONTEXT_BUILDER_VERSION = "context-pack-v1.2+hybrid-rrf-v1"
 CHARS_PER_ESTIMATED_TOKEN = 4
 MIN_EVIDENCE_CHARS = 64
 
@@ -43,7 +43,13 @@ class ContextScope(StrictModel):
 
 
 class RetrievalChannelContribution(StrictModel):
-    channel: Literal["lexical_fts5", "symbol_exact", "relation_source"]
+    channel: Literal[
+        "lexical_fts5",
+        "lexical_postgres_fts",
+        "lexical_zoekt",
+        "symbol_exact",
+        "relation_source",
+    ]
     rank: int
     weight: float
     reciprocal_score: float
@@ -150,7 +156,7 @@ class ContextPack(StrictModel):
     )
 
     schema_uri: Literal["urn:aiknowledge:schema:context-pack:v1"]
-    schema_version: Literal["1.1"]
+    schema_version: Literal["1.2"]
     id: str
     query: str
     scope: ContextScope
