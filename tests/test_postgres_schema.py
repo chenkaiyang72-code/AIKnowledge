@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import Connection, create_engine, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateTable
 
-from aikb.postgres_schema_v1 import metadata
-from aikb.postgres_catalog import PostgresCatalog
+from aikb.catalog import Catalog
 from aikb.context_pack import build_context_pack
+from aikb.ingestion import ingest_source
+from aikb.postgres_catalog import PostgresCatalog
+from aikb.postgres_publish import PostgresSnapshotPublisher
+from aikb.postgres_schema_v1 import metadata
 
 
 EXPECTED_TABLES = {
@@ -256,12 +261,206 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             self.assertIn("symbol_exact", {
                 item.channel for item in pack.evidence[0].retrieval.contributions
             })
+            lexical_hits = adapter.search(
+                "init_idle definitely_absent",
+                repository=f"adapter-{suffix}",
+            )
+            self.assertEqual(lexical_hits[0].symbol, "init_idle")
         finally:
             with self.engine.begin() as connection:
                 connection.execute(
                     text("DELETE FROM repository WHERE id=:id"), {"id": repository_id}
                 )
                 connection.execute(text("DELETE FROM blob WHERE id=:id"), {"id": blob_id})
+
+    def test_snapshot_publisher_is_atomic_idempotent_and_reversible(self) -> None:
+        suffix = uuid.uuid4().hex
+        project = f"publisher-{suffix}"
+        repository_id: str | None = None
+        blob_ids: set[str] = set()
+
+        class FailingPublisher(PostgresSnapshotPublisher):
+            def _validate_counts(
+                self,
+                target: Connection,
+                snapshot: dict[str, Any],
+            ) -> None:
+                super()._validate_counts(target, snapshot)
+                raise RuntimeError("injected validation failure")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "linux"
+            source.mkdir()
+            (source / "Makefile").write_text(
+                "VERSION = 6\nPATCHLEVEL = 18\nSUBLEVEL = 40\nEXTRAVERSION =\n",
+                encoding="utf-8",
+            )
+            (source / "Kconfig").write_text('mainmenu "test"\n', encoding="utf-8")
+            for directory in ["arch", "drivers", "fs", "kernel", "mm", "include"]:
+                (source / directory).mkdir()
+            symbol = f"publish_{suffix}"
+            header = source / "include" / "publisher.h"
+            implementation = source / "kernel" / "publisher.c"
+            header.write_text(f"int {symbol}(void);\n", encoding="utf-8")
+            implementation.write_text(
+                '#include "../include/publisher.h"\n'
+                f"int {symbol}(void) {{ return 1; }}\n",
+                encoding="utf-8",
+            )
+            scope = {
+                "scope_id": f"publisher-scope-{suffix}",
+                "source": {
+                    "project": project,
+                    "version": "6.18.40",
+                    "kind": "release_archive",
+                    "archive_name": f"linux-{suffix}.tar.xz",
+                    "archive_sha256": suffix * 2,
+                    "git_commit": None,
+                },
+                "include_roots": ["kernel", "include"],
+                "exclude_globs": [],
+                "index_policy": {
+                    "mode": "source_only",
+                    "execute_build": False,
+                    "requires_build_artifacts": False,
+                },
+            }
+            try:
+                with Catalog(root / "catalog.db") as catalog:
+                    catalog.initialize()
+                    first = ingest_source(catalog, scope, source)
+                    blob_ids.update(
+                        row["id"]
+                        for row in catalog.connection.execute("SELECT id FROM blob")
+                    )
+                    repository_id = catalog.connection.execute(
+                        "SELECT repository_id FROM snapshot WHERE id=?", (first["id"],)
+                    ).fetchone()["repository_id"]
+                    publisher = PostgresSnapshotPublisher(self.engine, batch_size=1)
+                    first_publish = publisher.publish(catalog, first["id"])
+                    self.assertFalse(first_publish.idempotent)
+                    self.assertEqual(first_publish.state, "active")
+
+                    with self.engine.connect() as connection:
+                        states = connection.execute(
+                            text(
+                                "SELECT state FROM snapshot_event WHERE snapshot_id=:id "
+                                "ORDER BY id"
+                            ),
+                            {"id": first["id"]},
+                        ).scalars().all()
+                    self.assertEqual(states, ["building", "validated", "active"])
+
+                    adapter = PostgresCatalog(POSTGRES_URL, engine=self.engine)
+                    pack = build_context_pack(
+                        adapter,
+                        symbol,
+                        repository=project,
+                        max_evidence_items=2,
+                    )
+                    self.assertEqual(pack.evidence[0].symbol, symbol)
+                    self.assertEqual(pack.evidence[0].snapshot_id, first["id"])
+
+                    repeated = publisher.publish(catalog, first["id"])
+                    self.assertTrue(repeated.idempotent)
+                    self.assertFalse(repeated.reactivated)
+                    with self.engine.connect() as connection:
+                        event_count = connection.execute(
+                            text(
+                                "SELECT count(*) FROM snapshot_event "
+                                "WHERE snapshot_id=:id"
+                            ),
+                            {"id": first["id"]},
+                        ).scalar_one()
+                    self.assertEqual(event_count, 3)
+
+                    implementation.write_text(
+                        '#include "../include/publisher.h"\n'
+                        f"int {symbol}(void) {{ return 2; }}\n",
+                        encoding="utf-8",
+                    )
+                    second = ingest_source(catalog, scope, source)
+                    blob_ids.update(
+                        row["id"]
+                        for row in catalog.connection.execute("SELECT id FROM blob")
+                    )
+                    second_publish = publisher.publish(catalog, second["id"])
+                    self.assertEqual(
+                        second_publish.superseded_snapshot_ids, (first["id"],)
+                    )
+                    with self.engine.connect() as connection:
+                        snapshot_states = dict(
+                            connection.execute(
+                                text(
+                                    "SELECT id,state FROM snapshot "
+                                    "WHERE repository_id=:repository_id"
+                                ),
+                                {"repository_id": repository_id},
+                            ).all()
+                        )
+                    self.assertEqual(
+                        snapshot_states,
+                        {first["id"]: "superseded", second["id"]: "active"},
+                    )
+
+                    implementation.write_text(
+                        '#include "../include/publisher.h"\n'
+                        f"int {symbol}(void) {{ return 3; }}\n",
+                        encoding="utf-8",
+                    )
+                    third = ingest_source(catalog, scope, source)
+                    blob_ids.update(
+                        row["id"]
+                        for row in catalog.connection.execute("SELECT id FROM blob")
+                    )
+                    with self.assertRaisesRegex(
+                        RuntimeError, "injected validation failure"
+                    ):
+                        FailingPublisher(self.engine, batch_size=1).publish(
+                            catalog, third["id"]
+                        )
+                    with self.engine.connect() as connection:
+                        failed_snapshot_count = connection.execute(
+                            text("SELECT count(*) FROM snapshot WHERE id=:id"),
+                            {"id": third["id"]},
+                        ).scalar_one()
+                        active_snapshot = connection.execute(
+                            text(
+                                "SELECT id FROM snapshot WHERE repository_id=:repository_id "
+                                "AND state='active'"
+                            ),
+                            {"repository_id": repository_id},
+                        ).scalar_one()
+                    self.assertEqual(failed_snapshot_count, 0)
+                    self.assertEqual(active_snapshot, second["id"])
+
+                    reactivated = publisher.publish(catalog, first["id"])
+                    self.assertTrue(reactivated.idempotent)
+                    self.assertTrue(reactivated.reactivated)
+                    self.assertEqual(
+                        reactivated.superseded_snapshot_ids, (second["id"],)
+                    )
+                    with self.engine.connect() as connection:
+                        active_snapshot = connection.execute(
+                            text(
+                                "SELECT id FROM snapshot WHERE repository_id=:repository_id "
+                                "AND state='active'"
+                            ),
+                            {"repository_id": repository_id},
+                        ).scalar_one()
+                    self.assertEqual(active_snapshot, first["id"])
+            finally:
+                if repository_id is not None:
+                    with self.engine.begin() as connection:
+                        connection.execute(
+                            text("DELETE FROM repository WHERE id=:id"),
+                            {"id": repository_id},
+                        )
+                        for blob_id in blob_ids:
+                            connection.execute(
+                                text("DELETE FROM blob WHERE id=:id"), {"id": blob_id}
+                            )
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sqlalchemy import Engine, bindparam, create_engine, text
@@ -99,19 +100,29 @@ class PostgresCatalog:
             raise ValueError("query must not be empty")
         if top_k < 1 or top_k > 100:
             raise ValueError("top-k must be between 1 and 100")
+        terms = list(dict.fromkeys(re.findall(r"[\w]+", query)))[:32]
+        if not terms:
+            raise ValueError("query must contain at least one searchable term")
         scope_sql, parameters = self._scope_sql(repository, snapshot_id)
-        parameters.update({"query": query, "limit": top_k * 5})
+        parameters.update(
+            {f"term_{index}": term for index, term in enumerate(terms)}
+        )
+        parameters["limit"] = top_k * 5
+        tsquery_sql = " || ".join(
+            f"plainto_tsquery('simple', :term_{index})"
+            for index in range(len(terms))
+        )
         statement = text(
             "SELECT c.id AS chunk_id, f.blob_id, c.content_hash, "
             "r.name AS repository, s.id AS snapshot_id, s.revision, f.path, "
             "c.start_line, c.end_line, c.kind, c.symbol, c.generator, c.content, "
             "ts_rank_cd(to_tsvector('simple', c.content), "
-            "plainto_tsquery('simple', :query)) AS lexical_rank "
+            f"({tsquery_sql})) AS lexical_rank "
             "FROM chunk c JOIN source_file f ON f.id = c.file_id "
             "JOIN snapshot s ON s.id = c.snapshot_id "
             "JOIN repository r ON r.id = s.repository_id "
             "WHERE to_tsvector('simple', c.content) @@ "
-            "plainto_tsquery('simple', :query) "
+            f"({tsquery_sql}) "
             f"AND {scope_sql} "
             "ORDER BY lexical_rank DESC, f.path, c.start_line LIMIT :limit"
         )

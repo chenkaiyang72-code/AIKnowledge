@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -110,6 +111,18 @@ def build_parser() -> argparse.ArgumentParser:
     context_parser.add_argument("--max-symbols", type=int, default=5)
     context_parser.add_argument("--max-relations-per-symbol", type=int, default=8)
 
+    publish_parser = subparsers.add_parser(
+        "kb-publish-postgres",
+        help="atomically publish a validated local snapshot to PostgreSQL",
+    )
+    publish_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE)
+    publish_parser.add_argument("--snapshot-id")
+    publish_parser.add_argument(
+        "--postgres-url",
+        help="SQLAlchemy URL; prefer the AIKB_POSTGRES_URL environment variable",
+    )
+    publish_parser.add_argument("--batch-size", type=int, default=1_000)
+
     subparsers.add_parser(
         "kb-context-schema",
         help="print the generated JSON Schema for Context Pack v1",
@@ -189,6 +202,30 @@ def main(argv: list[str] | None = None) -> int:
                     repository=args.repository,
                     snapshot_id=args.snapshot_id,
                 )
+            elif args.command == "kb-publish-postgres":
+                postgres_url = args.postgres_url or os.environ.get(
+                    "AIKB_POSTGRES_URL"
+                )
+                if not postgres_url:
+                    raise ValueError(
+                        "set AIKB_POSTGRES_URL or pass --postgres-url"
+                    )
+                try:
+                    from sqlalchemy import create_engine
+
+                    from aikb.postgres_publish import PostgresSnapshotPublisher
+                except ImportError as error:
+                    raise RuntimeError(
+                        "PostgreSQL support is not installed; run "
+                        "python -m pip install -e \".[postgres]\""
+                    ) from error
+                engine = create_engine(postgres_url)
+                try:
+                    report = PostgresSnapshotPublisher(
+                        engine, batch_size=args.batch_size
+                    ).publish(catalog, args.snapshot_id).as_dict()
+                finally:
+                    engine.dispose()
             else:
                 report = build_context_pack(
                     catalog=catalog,
