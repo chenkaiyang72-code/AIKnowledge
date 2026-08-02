@@ -14,6 +14,7 @@
 - [项目进展：已完成与未完成事项](docs/progress.md)
 - [首个实验：Linux 6.18.40 lexical baseline](evals/datasets/linux-6.18.40/README.md)
 - [Phase 0B：本地知识库启动骨架](docs/phase-0b-bootstrap.md)
+- [Context Pack v1：AI 客户端证据契约](docs/context-pack-v1.md)
 
 首版技术路线：Python 模块化单体与独立 worker，使用 PostgreSQL/pgvector 保存元数据和向量，使用 Tree-sitter、源码标识符/关系提取器和 Zoekt 建立无需编译的代码索引，并通过只读 MCP 网关向不同 AI 客户端提供带版本和引用的 Context Pack。
 
@@ -34,9 +35,14 @@ python -m aikb kb-ingest `
 python -m aikb kb-search --query "init_idle do_idle" --top-k 5
 
 python -m aikb kb-symbol --name init_idle --top-k 20
+
+python -m aikb kb-context `
+  --query "init_idle do_idle" `
+  --max-evidence-items 6 `
+  --evidence-token-budget 1200
 ```
 
-默认数据库位于 `.aikb/catalog.db`。`kb-symbol` 返回定义/声明、调用和 include 等直接扫描关系，并明确标注 `source_exact`、`source_inferred` 或 `ambiguous_candidate`。依赖扩展默认读取 scope 中的深度、文件数和每条引用候选数预算；只改变扫描预算不会使未变化源码的分析缓存失效。SQLite 只用于本地 bootstrap；团队共享主库仍按设计使用 PostgreSQL/pgvector。
+默认数据库位于 `.aikb/catalog.db`。`kb-symbol` 返回定义/声明、调用和 include 等直接扫描关系，并明确标注 `source_exact`、`source_inferred` 或 `ambiguous_candidate`。`kb-context` 输出带不可变 snapshot、blob/chunk 哈希、稳定 citation、预算和 retrieval trace 的 Context Pack v1；没有证据时明确返回 gap。依赖扩展默认读取 scope 中的深度、文件数和每条引用候选数预算；只改变扫描预算不会使未变化源码的分析缓存失效。SQLite 只用于本地 bootstrap；团队共享主库仍按设计使用 PostgreSQL/pgvector。
 
 ## 核心原则
 

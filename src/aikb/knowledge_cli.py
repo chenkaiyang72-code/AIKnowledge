@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from aikb.catalog import Catalog
+from aikb.context_pack import build_context_pack, context_pack_json_schema
 from aikb.ingestion import (
     DEFAULT_CHUNK_LINES,
     DEFAULT_CHUNK_OVERLAP,
@@ -84,12 +85,33 @@ def build_parser() -> argparse.ArgumentParser:
     symbol_parser.add_argument("--top-k", type=int, default=50)
     symbol_parser.add_argument("--repository")
     symbol_parser.add_argument("--snapshot-id")
+
+    context_parser = subparsers.add_parser(
+        "kb-context",
+        help="build a versioned Context Pack with citations and retrieval trace",
+    )
+    context_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE)
+    context_parser.add_argument("--query", required=True)
+    context_parser.add_argument("--repository")
+    context_parser.add_argument("--snapshot-id")
+    context_parser.add_argument("--max-evidence-items", type=int, default=8)
+    context_parser.add_argument("--evidence-token-budget", type=int, default=3_000)
+    context_parser.add_argument("--max-symbols", type=int, default=5)
+    context_parser.add_argument("--max-relations-per-symbol", type=int, default=8)
+
+    subparsers.add_parser(
+        "kb-context-schema",
+        help="print the generated JSON Schema for Context Pack v1",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "kb-context-schema":
+            print(json.dumps(context_pack_json_schema(), ensure_ascii=False, indent=2))
+            return 0
         with Catalog(args.db) as catalog:
             catalog.initialize()
             if args.command == "kb-ingest":
@@ -123,13 +145,24 @@ def main(argv: list[str] | None = None) -> int:
                     "result_count": len(hits),
                     "results": [hit.as_dict() for hit in hits],
                 }
-            else:
+            elif args.command == "kb-symbol":
                 report = catalog.find_symbol(
                     name=args.name,
                     top_k=args.top_k,
                     repository=args.repository,
                     snapshot_id=args.snapshot_id,
                 )
+            else:
+                report = build_context_pack(
+                    catalog=catalog,
+                    query=args.query,
+                    repository=args.repository,
+                    snapshot_id=args.snapshot_id,
+                    max_evidence_items=args.max_evidence_items,
+                    evidence_token_budget=args.evidence_token_budget,
+                    max_symbols=args.max_symbols,
+                    max_relations_per_symbol=args.max_relations_per_symbol,
+                ).model_dump(mode="json")
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     except (KeyError, OSError, RuntimeError, ValueError) as error:

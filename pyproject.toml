@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Versioned and auditable code context for AI clients"
 requires-python = ">=3.11"
 dependencies = [
+  "pydantic==2.13.4",
   "tree-sitter==0.25.2",
   "tree-sitter-c==0.24.2",
 ]

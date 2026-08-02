@@ -2,7 +2,7 @@
 
 最后更新：2026-08-02<br>
 当前阶段：Phase 0B 本地知识库启动骨架（进行中）<br>
-当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立不可变本地 snapshot、Tree-sitter C 结构化 chunk、source-only 关系和有界依赖扩展。整个索引链路不编译源码；下一步把检索证据封装为稳定、可追溯的 Context Pack v1。
+当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立不可变本地 snapshot、Tree-sitter C 结构化 chunk、source-only 关系、有界依赖扩展和 Context Pack v1。整个索引链路不编译源码；下一步建立可替换 retriever 接口与 lexical/symbol 混合召回，再接入 Zoekt 和 PostgreSQL。
 
 ## 维护规则
 
@@ -95,7 +95,12 @@
 - 对同一批 `kernel/sched` 调用关系，目标解析率由 `40.11%` 提升到 `50.94%`，`ambiguous_candidate` 比例由 `60.62%` 降到 `49.78%`，没有把歧义候选伪装成唯一精确关系。
 - 具体样例：`kb-symbol init_idle` 已同时返回 `include/linux/sched/task.h:64` 的声明和 `kernel/sched/core.c:7969-8027` 的定义；C header 与 C implementation 当前仍保留不同 logical symbol ID，后续必须基于语言族、签名、definition 数量和条件判断后再安全归并。
 - 已修正分析缓存边界：依赖扫描预算属于 snapshot index profile，不属于 blob analysis profile。默认扩展首次扫描为 52 hit/166 miss；只把文件预算从 500 改为 499 后为 218 hit/0 miss，证明范围策略变化可以复用全部未变化源码分析。
-- 默认配置 active snapshot 为 `snap_0b0e8c0e71ad7f720c31b8e2`；重复扫描返回相同 snapshot 且 `idempotent=true`，已存在的 superseded snapshot 可原子重新激活并保留事件记录。自动化测试现为 14 个并全部通过。
+- 默认配置 active snapshot 为 `snap_0b0e8c0e71ad7f720c31b8e2`；重复扫描返回相同 snapshot 且 `idempotent=true`，已存在的 superseded snapshot 可原子重新激活并保留事件记录。
+- 已实现 Context Pack v1 Pydantic schema 与 `kb-context-schema`：固定 `urn:aiknowledge:schema:context-pack:v1`，拒绝额外字段，版本字段必须显式存在。
+- 已实现 `kb-context`：输出不可变 snapshot、blob/chunk 哈希、稳定 citation、代码证据、symbol/关系候选、预算、coverage、gap 和确定性 retrieval trace；它不调用模型、不生成答案。
+- 已实现证据条数和近似 token 预算，逐候选记录 `selected`、`item_budget` 或 `token_budget`；无证据查询返回 `evidence_status=none`。
+- 真实 `init_idle do_idle` Context Pack 为 `context_1ee60c0a5dbd4e5cd34154bf`，trace 为 `trace_07a671354aac1843ba2fe5f1`：5 条证据、4,325 字符、约 1,082 token，重复构建 ID 相同。
+- Context Pack 自动化测试覆盖 schema 严格性、确定性、citation 回查、预算截断和 unknown/gap；自动化测试现为 18 个并全部通过。
 
 ## 3. 还未完成的计划
 
@@ -107,7 +112,7 @@
 
 | 优先级 | 未完成事项 | 下一动作 | 完成条件 |
 | --- | --- | --- | --- |
-| P0 | 输出 Context Pack v1 | 定义版本化 schema，把源码片段、关系、条件、snapshot、引用和检索 trace 组合为有 token/条数预算的上下文包 | CLI 输出可重复，所有 evidence 都能回查当前 snapshot 的 blob 与行范围 |
+| P0 | 建立 retriever 接口和本地混合召回 | 把 SQLite FTS、精确 symbol、关系扩展拆成独立通道，用 RRF 合并并记录每路 trace | Context Pack 不依赖单一 FTS 排名，精确符号查询优先返回定义/声明 |
 | P0 | 建立 PostgreSQL schema | 把当前领域约束落成 PostgreSQL migration | 本地 Compose 环境可重复创建并通过约束测试 |
 | P1 | 建立正式 lexical 与混合检索 | 接入 Zoekt，再增加 symbol/vector 通道与 RRF | 能输出可解释 retrieval trace，并可直接替换 Context Pack 的当前召回器 |
 | P1 | 扩大 source-only 规则覆盖 | 完善复杂 Kconfig/Kbuild 变量、更多语言 import 和注册模式 | 未解析/歧义统计可解释，并由真实问题决定规则优先级 |
@@ -118,8 +123,8 @@
 - Kconfig/Kbuild 第一版规则只覆盖常见语法，复杂变量展开和跨文件条件仍需扩展。
 - C header 声明与 C implementation 定义尚未做受约束的 logical symbol 归并；不能仅按同名强制合并，否则配置互斥实现或多个定义会被错误标成唯一目标。
 - 尚未部署 Zoekt 正式代码文本索引。
-- 尚未实现 lexical、symbol、vector 和团队知识的混合召回及 RRF。
-- 尚未实现稳定 citation、retrieval trace 和 Context Pack。
+- 尚未实现 lexical、symbol、vector 和团队知识的混合召回及 RRF；当前 Context Pack 只使用 SQLite FTS5 加 symbol 元数据。
+- Context Pack v1 已实现，但团队知识、ACL partial visibility 和 provider tokenizer 尚未接入。
 
 只有完成这些工作并通过 Phase 0B 指标后，才可以称为“成功建立了第一版单仓代码知识库”。
 
@@ -143,13 +148,14 @@
 | 4 | 直接扫描 Linux 源码关系 | Codex | 定义/声明、include、Kconfig/Kbuild、调用候选提取器 | 已完成第一版，`kernel/sched` 可重复生成相同关系 |
 | 5 | 实现 blob 级增量分析复用 | Codex | analysis artifact cache、命中/未命中统计 | 已完成，真实冷/热缓存对照通过 |
 | 6 | 实现依赖引导的范围扩展 | Codex | 有界依赖发现、解析统计、snapshot profile | 已完成，46 个种子扩展到 218 个文件且歧义率下降 |
-| 7 | 输出 Context Pack v1 | Codex | evidence、citation、snapshot、trace、预算 | CLI 能返回稳定、可验证的上下文包 |
-| 8 | 建立 PostgreSQL/pgvector 环境并接入 Zoekt | Codex + 用户安装基础设施 | migration、正式 lexical index、健康检查 | 相同 schema 通过约束测试且全文结果可统一召回 |
-| 9 | 恢复评测问题集 | Codex + 用户 | 证据复核、负样本和黄金集 | 用真实问题验证 Phase 0B 是否达标 |
+| 7 | 输出 Context Pack v1 | Codex | evidence、citation、snapshot、trace、预算 | 已完成，真实 Linux 快照和 unknown 查询验证通过 |
+| 8 | 建立 retriever 接口与本地 lexical/symbol RRF | Codex | 通道契约、统一候选、RRF、分通道 trace | 精确符号定义不再被高频调用点淹没 |
+| 9 | 建立 PostgreSQL/pgvector 环境并接入 Zoekt | Codex + 用户安装基础设施 | migration、正式 lexical index、健康检查 | 相同 schema 通过约束测试且全文结果可统一召回 |
+| 10 | 恢复评测问题集 | Codex + 用户 | 证据复核、负样本和黄金集 | 用真实问题验证 Phase 0B 是否达标 |
 
 ### 现在立即要做的动作
 
-下一项开发工作是实现 `Context Pack v1`：先定义 versioned JSON schema，再把当前 FTS/symbol 结果、关系候选、配置条件、snapshot 和稳定 citation 组装成有条数与字符预算的证据包，并记录可重复的 retrieval trace。它先使用现有 SQLite adapter 验证产品契约，后续 Zoekt、pgvector 和跨仓路由只替换召回来源，不改变 AI 客户端消费格式。整个过程仍不编译源码、不执行仓库脚本；问题集暂时不需要处理。
+下一项开发工作是建立 retriever interface：把当前 SQLite FTS5、精确 symbol occurrence 和有限关系扩展变成独立候选通道，使用 RRF 做确定性融合，并在 Context Pack trace 中保留各通道排名。完成本地契约后再接入 Zoekt adapter 和 PostgreSQL migration，避免基础设施细节反向污染产品 schema。整个过程仍不编译源码、不执行仓库脚本；问题集暂时不需要人工处理。
 
 ## 相关文档
 
@@ -159,3 +165,4 @@
 - [Linux 6.18.40 Phase 0A 实验](../evals/datasets/linux-6.18.40/README.md)
 - [第一批真实问题基线报告](../evals/reports/linux-6.18.40-first-batch.md)
 - [Phase 0B 本地知识库启动骨架](phase-0b-bootstrap.md)
+- [Context Pack v1](context-pack-v1.md)

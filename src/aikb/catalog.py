@@ -221,6 +221,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
 @dataclass(frozen=True)
 class SearchHit:
     chunk_id: str
+    blob_id: str
+    content_hash: str
     repository: str
     snapshot_id: str
     revision: str
@@ -232,10 +234,13 @@ class SearchHit:
     generator: str
     rank: float
     content: str
+    content_truncated: bool
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "chunk_id": self.chunk_id,
+            "blob_id": self.blob_id,
+            "content_hash": self.content_hash,
             "repository": self.repository,
             "snapshot_id": self.snapshot_id,
             "revision": self.revision,
@@ -251,6 +256,7 @@ class SearchHit:
             ),
             "rank": self.rank,
             "content": self.content,
+            "content_truncated": self.content_truncated,
         }
 
 
@@ -565,6 +571,41 @@ class Catalog:
             "relations": relations,
         }
 
+    def resolve_snapshots(
+        self,
+        repository: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        predicates: list[str] = []
+        parameters: list[Any] = []
+        if snapshot_id:
+            predicates.append("s.id = ?")
+            parameters.append(snapshot_id)
+        else:
+            predicates.append("s.state = 'active'")
+        if repository:
+            predicates.append("r.name = ?")
+            parameters.append(repository)
+        rows = self.connection.execute(
+            f"""
+            SELECT r.name AS repository, s.id AS snapshot_id, s.revision,
+                   s.source_digest, s.manifest_digest, s.index_profile_digest,
+                   s.state
+            FROM snapshot AS s
+            JOIN repository AS r ON r.id = s.repository_id
+            WHERE {' AND '.join(predicates)}
+            ORDER BY r.name, s.id
+            """,
+            parameters,
+        ).fetchall()
+        if snapshot_id and not rows:
+            raise ValueError(f"snapshot not found in requested scope: {snapshot_id}")
+        if repository and not rows:
+            raise ValueError(f"repository has no snapshot in requested scope: {repository}")
+        if not rows:
+            raise ValueError("catalog has no active snapshots")
+        return [dict(row) for row in rows]
+
     def search(
         self,
         query: str,
@@ -595,7 +636,8 @@ class Catalog:
 
         rows = self.connection.execute(
             f"""
-            SELECT c.id AS chunk_id, r.name AS repository, s.id AS snapshot_id,
+            SELECT c.id AS chunk_id, f.blob_id, c.content_hash,
+                   r.name AS repository, s.id AS snapshot_id,
                    s.revision, f.path, c.start_line, c.end_line,
                    c.kind, c.symbol, c.generator,
                    bm25(chunk_fts) AS fts_rank, chunk_fts.content AS content
@@ -619,11 +661,15 @@ class Catalog:
                 continue
             per_file[key] = per_file.get(key, 0) + 1
             content = row["content"]
+            content_truncated = False
             if len(content) > 1_600:
                 content = content[:1_600].rstrip() + "\n…"
+                content_truncated = True
             hits.append(
                 SearchHit(
                     chunk_id=row["chunk_id"],
+                    blob_id=row["blob_id"],
+                    content_hash=row["content_hash"],
                     repository=row["repository"],
                     snapshot_id=row["snapshot_id"],
                     revision=row["revision"],
@@ -635,6 +681,7 @@ class Catalog:
                     generator=row["generator"],
                     rank=row["fts_rank"],
                     content=content,
+                    content_truncated=content_truncated,
                 )
             )
             if len(hits) >= top_k:
