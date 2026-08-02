@@ -71,8 +71,20 @@ jobs:
           done
           docker logs aikb-zoekt-ci
           exit 1
+      - name: Verify raw Zoekt API
+        run: |
+          curl --fail --silent --show-error \
+            -H 'Content-Type: application/json' \
+            --data '{"Q":"zoekt_live_marker","Opts":{"MaxDocDisplayCount":10}}' \
+            http://127.0.0.1:6070/api/search
+          curl --fail --silent --show-error \
+            -H 'Content-Type: application/json' \
+            --data '{"Q":"repo:aikb"}' \
+            http://127.0.0.1:6070/api/list
       - name: Run tests
         run: python -B -m unittest discover -s tests -v
       - name: Stop Zoekt
         if: always()
-        run: docker rm -f aikb-zoekt-ci || true
+        run: |
+          docker logs aikb-zoekt-ci || true
+          docker rm -f aikb-zoekt-ci || true

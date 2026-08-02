@@ -394,7 +394,7 @@ class ZoektClient:
         result = response.get("Result")
         if not isinstance(result, dict):
             raise ZoektProtocolError("Zoekt response has no Result object")
-        files = result.get("Files", [])
+        files = result.get("Files") or []
         if not isinstance(files, list):
             raise ZoektProtocolError("Zoekt Result.Files must be a list")
         locations: list[SourceLocation] = []
