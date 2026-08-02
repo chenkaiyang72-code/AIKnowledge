@@ -377,9 +377,12 @@ class ZoektClient:
         content_query = " or ".join(
             f'content:"{_quote_value(term)}"' for term in terms
         )
-        repository_query = " or ".join(
-            f'repo:"{_quote_value(name)}"' for name in scopes
-        )
+        # Repository names are generated from a deliberately restricted character
+        # set.  Zoekt treats repo: values as regular expressions, and the pinned
+        # image's shard pre-filter does not match quoted or anchored forms here.
+        # Keep the query form compatible, then enforce exact scope on every
+        # returned FileMatch below before it can become evidence.
+        repository_query = " or ".join(f"repo:{name}" for name in scopes)
         zoekt_query = f"({content_query}) ({repository_query})"
         payload = {
             "Q": zoekt_query,
