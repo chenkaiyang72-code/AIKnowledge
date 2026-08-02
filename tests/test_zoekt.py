@@ -159,6 +159,10 @@ class ZoektTests(unittest.TestCase):
         self.assertEqual(pack.schema_version, "1.2")
         self.assertIn("lexical_zoekt", pack.retrieval_trace.channel_candidate_counts)
         self.assertEqual(len(requests), 2)
+        self.assertEqual(
+            requests[0]["Q"],
+            f"exact_zoekt_marker repo:{internal_repository}",
+        )
         self.assertIn(f"repo:{internal_repository}", requests[0]["Q"])
         self.assertTrue(requests[0]["Opts"]["UseBM25Scoring"])
 

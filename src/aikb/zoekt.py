@@ -374,16 +374,22 @@ class ZoektClient:
         scopes = {
             zoekt_repository_name(row["snapshot_id"]): row for row in snapshots
         }
-        content_query = " or ".join(
-            f'content:"{_quote_value(term)}"' for term in terms
-        )
+        # Terms are extracted with ``\w+`` and therefore contain no Zoekt query
+        # operators.  Keeping the one-term form bare matches the API's canonical
+        # query shape and avoids image-version differences around redundant
+        # quoted/grouped expressions.
+        content_query = " or ".join(terms)
+        if len(terms) > 1:
+            content_query = f"({content_query})"
         # Repository names are generated from a deliberately restricted character
         # set.  Zoekt treats repo: values as regular expressions, and the pinned
         # image's shard pre-filter does not match quoted or anchored forms here.
         # Keep the query form compatible, then enforce exact scope on every
         # returned FileMatch below before it can become evidence.
         repository_query = " or ".join(f"repo:{name}" for name in scopes)
-        zoekt_query = f"({content_query}) ({repository_query})"
+        if len(scopes) > 1:
+            repository_query = f"({repository_query})"
+        zoekt_query = f"{content_query} {repository_query}"
         payload = {
             "Q": zoekt_query,
             "Opts": {
@@ -477,10 +483,6 @@ class ZoektClient:
         if not isinstance(decoded, dict):
             raise ZoektProtocolError("Zoekt response must be an object")
         return decoded
-
-
-def _quote_value(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _number(value: object, default: float) -> float:
