@@ -11,6 +11,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateTable
 
 from aikb.postgres_schema_v1 import metadata
+from aikb.postgres_catalog import PostgresCatalog
+from aikb.context_pack import build_context_pack
 
 
 EXPECTED_TABLES = {
@@ -85,8 +87,9 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             extension = connection.execute(
                 text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             ).scalar_one()
-        self.assertEqual(version, "1")
+        self.assertEqual(version, "2")
         self.assertTrue(extension)
+        self.assertIn("content", {column["name"] for column in inspector.get_columns("chunk")})
 
     def test_only_one_active_snapshot_is_allowed_per_repository(self) -> None:
         suffix = uuid.uuid4().hex
@@ -145,6 +148,120 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
                     text("DELETE FROM repository WHERE id = :repository_id"),
                     {"repository_id": repository_id},
                 )
+
+    def test_postgres_read_adapter_builds_context_pack(self) -> None:
+        suffix = uuid.uuid4().hex
+        repository_id = f"repo_{suffix}"
+        snapshot_id = f"snap_{suffix}"
+        blob_id = "1" * 64
+        file_id = f"file_{suffix}"
+        chunk_id = f"chunk_{suffix}"
+        symbol_id = f"symbol_{suffix}"
+        occurrence_id = f"occurrence_{suffix}"
+        content = "int init_idle(void) { return 0; }\n"
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO repository(id,name,source_kind,source_uri) "
+                    "VALUES (:id,:name,'test','test://source')"
+                ),
+                {"id": repository_id, "name": f"adapter-{suffix}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO snapshot(id,repository_id,revision,source_digest,"
+                    "manifest_digest,index_profile_digest,state,file_count,blob_count,"
+                    "chunk_count,symbol_occurrence_count) VALUES "
+                    "(:id,:repository_id,'rev-1',:source,:manifest,:profile,'active',1,1,1,1)"
+                ),
+                {
+                    "id": snapshot_id,
+                    "repository_id": repository_id,
+                    "source": "2" * 64,
+                    "manifest": "3" * 64,
+                    "profile": "4" * 64,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO blob(id,size_bytes,compressed_content) "
+                    "VALUES (:id,:size,:content)"
+                ),
+                {"id": blob_id, "size": len(content), "content": b"placeholder"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO source_file(id,snapshot_id,blob_id,path,language,"
+                    "line_count,size_bytes,decode_status,parse_status) VALUES "
+                    "(:id,:snapshot,:blob,'kernel/demo.c','c',1,:size,'utf8','structured')"
+                ),
+                {
+                    "id": file_id,
+                    "snapshot": snapshot_id,
+                    "blob": blob_id,
+                    "size": len(content),
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO chunk(id,snapshot_id,file_id,ordinal,kind,start_line,"
+                    "end_line,symbol,content_hash,generator,content) VALUES "
+                    "(:id,:snapshot,:file,0,'function',1,1,'init_idle',:hash,"
+                    "'tree-sitter-c-v3',:content)"
+                ),
+                {
+                    "id": chunk_id,
+                    "snapshot": snapshot_id,
+                    "file": file_id,
+                    "hash": "5" * 64,
+                    "content": content,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO logical_symbol(id,repository_id,language,kind,namespace,"
+                    "name,signature) VALUES "
+                    "(:id,:repository,'c','function','repository','init_idle',:signature)"
+                ),
+                {
+                    "id": symbol_id,
+                    "repository": repository_id,
+                    "signature": "int init_idle(void)",
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO symbol_occurrence(id,snapshot_id,file_id,logical_symbol_id,"
+                    "role,start_line,end_line,confidence,generator) VALUES "
+                    "(:id,:snapshot,:file,:symbol,'definition',1,1,'source_exact',"
+                    "'source-relations-v2')"
+                ),
+                {
+                    "id": occurrence_id,
+                    "snapshot": snapshot_id,
+                    "file": file_id,
+                    "symbol": symbol_id,
+                },
+            )
+        try:
+            adapter = PostgresCatalog(POSTGRES_URL, engine=self.engine)
+            pack = build_context_pack(
+                adapter,
+                "init_idle",
+                repository=f"adapter-{suffix}",
+                max_evidence_items=2,
+            )
+            self.assertEqual(pack.evidence[0].symbol, "init_idle")
+            self.assertEqual(pack.evidence[0].snapshot_id, snapshot_id)
+            self.assertIn("symbol_exact", {
+                item.channel for item in pack.evidence[0].retrieval.contributions
+            })
+        finally:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("DELETE FROM repository WHERE id=:id"), {"id": repository_id}
+                )
+                connection.execute(text("DELETE FROM blob WHERE id=:id"), {"id": blob_id})
 
 
 if __name__ == "__main__":
