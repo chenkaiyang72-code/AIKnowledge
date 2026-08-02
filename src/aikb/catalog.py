@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -132,6 +133,9 @@ CREATE TABLE IF NOT EXISTS chunk (
 CREATE INDEX IF NOT EXISTS chunk_snapshot_file
 ON chunk(snapshot_id, file_id, ordinal);
 
+CREATE INDEX IF NOT EXISTS chunk_file_range
+ON chunk(file_id, start_line, end_line);
+
 CREATE TABLE IF NOT EXISTS logical_symbol (
     id TEXT PRIMARY KEY,
     repository_id TEXT NOT NULL REFERENCES repository(id),
@@ -209,6 +213,12 @@ ON relation(snapshot_id, kind, source_file_id);
 
 CREATE INDEX IF NOT EXISTS relation_target_symbol
 ON relation(snapshot_id, target_symbol_id, kind);
+
+CREATE INDEX IF NOT EXISTS relation_source_symbol
+ON relation(snapshot_id, source_symbol_id, kind);
+
+CREATE INDEX IF NOT EXISTS relation_target_text
+ON relation(snapshot_id, target_text, kind);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
     chunk_id UNINDEXED,
@@ -606,6 +616,201 @@ class Catalog:
             raise ValueError("catalog has no active snapshots")
         return [dict(row) for row in rows]
 
+    @staticmethod
+    def _search_hit_from_row(
+        row: sqlite3.Row,
+        rank: float,
+    ) -> SearchHit:
+        if "content" in row.keys():
+            content = row["content"]
+        else:
+            source_text = zlib.decompress(row["compressed_content"]).decode(
+                "utf-8", errors="replace"
+            )
+            source_lines = source_text.splitlines(keepends=True)
+            content = "".join(
+                source_lines[row["start_line"] - 1 : row["end_line"]]
+            )
+        content_truncated = False
+        if len(content) > 1_600:
+            content = content[:1_600].rstrip() + "\n…"
+            content_truncated = True
+        return SearchHit(
+            chunk_id=row["chunk_id"],
+            blob_id=row["blob_id"],
+            content_hash=row["content_hash"],
+            repository=row["repository"],
+            snapshot_id=row["snapshot_id"],
+            revision=row["revision"],
+            path=row["path"],
+            start_line=row["start_line"],
+            end_line=row["end_line"],
+            kind=row["kind"],
+            symbol=row["symbol"],
+            generator=row["generator"],
+            rank=rank,
+            content=content,
+            content_truncated=content_truncated,
+        )
+
+    def search_symbol_chunks(
+        self,
+        names: list[str],
+        top_k: int = 20,
+        repository: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> list[SearchHit]:
+        ordered_names = list(dict.fromkeys(name for name in names if name))
+        if not ordered_names:
+            return []
+        if top_k < 1 or top_k > 100:
+            raise ValueError("top-k must be between 1 and 100")
+        predicates = [
+            f"ls.name IN ({','.join('?' for _ in ordered_names)})"
+        ]
+        parameters: list[Any] = list(ordered_names)
+        if snapshot_id:
+            predicates.append("s.id = ?")
+            parameters.append(snapshot_id)
+        else:
+            predicates.append("s.state = 'active'")
+        if repository:
+            predicates.append("r.name = ?")
+            parameters.append(repository)
+        parameters.append(top_k * 10)
+        rows = self.connection.execute(
+            f"""
+            SELECT c.id AS chunk_id, f.blob_id, c.content_hash,
+                   r.name AS repository, s.id AS snapshot_id, s.revision,
+                   f.path, c.start_line, c.end_line, c.kind, c.symbol,
+                   c.generator, b.compressed_content,
+                   ls.name AS matched_name, so.role, so.start_line AS occurrence_line
+            FROM symbol_occurrence AS so
+            JOIN logical_symbol AS ls ON ls.id = so.logical_symbol_id
+            JOIN source_file AS f ON f.id = so.file_id
+            JOIN chunk AS c ON c.file_id = f.id
+                AND c.start_line <= so.start_line
+                AND c.end_line >= so.end_line
+            JOIN blob AS b ON b.id = f.blob_id
+            JOIN snapshot AS s ON s.id = so.snapshot_id
+            JOIN repository AS r ON r.id = s.repository_id
+            WHERE {' AND '.join(predicates)}
+            LIMIT ?
+            """,
+            parameters,
+        ).fetchall()
+        name_order = {name: index for index, name in enumerate(ordered_names)}
+        sorted_rows = sorted(
+            rows,
+            key=lambda row: (
+                name_order[row["matched_name"]],
+                0 if row["role"] == "definition" else 1,
+                row["path"],
+                row["occurrence_line"],
+                row["chunk_id"],
+            ),
+        )
+        hits: list[SearchHit] = []
+        seen: set[str] = set()
+        for row in sorted_rows:
+            if row["chunk_id"] in seen:
+                continue
+            seen.add(row["chunk_id"])
+            hits.append(self._search_hit_from_row(row, float(len(hits) + 1)))
+            if len(hits) >= top_k:
+                break
+        return hits
+
+    def search_relation_chunks(
+        self,
+        names: list[str],
+        top_k: int = 20,
+        repository: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> list[SearchHit]:
+        ordered_names = list(dict.fromkeys(name for name in names if name))
+        if not ordered_names:
+            return []
+        if top_k < 1 or top_k > 100:
+            raise ValueError("top-k must be between 1 and 100")
+        placeholders = ",".join("?" for _ in ordered_names)
+        predicates = [
+            f"(source_symbol.name IN ({placeholders}) "
+            f"OR target_symbol.name IN ({placeholders}) "
+            f"OR rel.target_text IN ({placeholders}))"
+        ]
+        parameters: list[Any] = ordered_names * 3
+        if snapshot_id:
+            predicates.append("s.id = ?")
+            parameters.append(snapshot_id)
+        else:
+            predicates.append("s.state = 'active'")
+        if repository:
+            predicates.append("r.name = ?")
+            parameters.append(repository)
+        parameters.append(top_k * 10)
+        rows = self.connection.execute(
+            f"""
+            SELECT c.id AS chunk_id, f.blob_id, c.content_hash,
+                   r.name AS repository, s.id AS snapshot_id, s.revision,
+                   f.path, c.start_line, c.end_line, c.kind, c.symbol,
+                   c.generator, b.compressed_content,
+                   source_symbol.name AS source_name,
+                   target_symbol.name AS target_name,
+                   rel.target_text, rel.start_line AS relation_line,
+                   rel.confidence
+            FROM relation AS rel
+            JOIN source_file AS f ON f.id = rel.source_file_id
+            JOIN chunk AS c ON c.file_id = f.id
+                AND c.start_line <= rel.start_line
+                AND c.end_line >= rel.end_line
+            JOIN blob AS b ON b.id = f.blob_id
+            JOIN snapshot AS s ON s.id = rel.snapshot_id
+            JOIN repository AS r ON r.id = s.repository_id
+            LEFT JOIN logical_symbol AS source_symbol
+                ON source_symbol.id = rel.source_symbol_id
+            LEFT JOIN logical_symbol AS target_symbol
+                ON target_symbol.id = rel.target_symbol_id
+            WHERE {' AND '.join(predicates)}
+            LIMIT ?
+            """,
+            parameters,
+        ).fetchall()
+        name_order = {name: index for index, name in enumerate(ordered_names)}
+
+        def matched_order(row: sqlite3.Row) -> int:
+            matches = [
+                name_order[value]
+                for value in (
+                    row["source_name"],
+                    row["target_name"],
+                    row["target_text"],
+                )
+                if value in name_order
+            ]
+            return min(matches) if matches else len(name_order)
+
+        sorted_rows = sorted(
+            rows,
+            key=lambda row: (
+                matched_order(row),
+                0 if row["confidence"] == "source_exact" else 1,
+                row["path"],
+                row["relation_line"],
+                row["chunk_id"],
+            ),
+        )
+        hits: list[SearchHit] = []
+        seen: set[str] = set()
+        for row in sorted_rows:
+            if row["chunk_id"] in seen:
+                continue
+            seen.add(row["chunk_id"])
+            hits.append(self._search_hit_from_row(row, float(len(hits) + 1)))
+            if len(hits) >= top_k:
+                break
+        return hits
+
     def search(
         self,
         query: str,
@@ -660,30 +865,7 @@ class Catalog:
             if per_file.get(key, 0) >= 2:
                 continue
             per_file[key] = per_file.get(key, 0) + 1
-            content = row["content"]
-            content_truncated = False
-            if len(content) > 1_600:
-                content = content[:1_600].rstrip() + "\n…"
-                content_truncated = True
-            hits.append(
-                SearchHit(
-                    chunk_id=row["chunk_id"],
-                    blob_id=row["blob_id"],
-                    content_hash=row["content_hash"],
-                    repository=row["repository"],
-                    snapshot_id=row["snapshot_id"],
-                    revision=row["revision"],
-                    path=row["path"],
-                    start_line=row["start_line"],
-                    end_line=row["end_line"],
-                    kind=row["kind"],
-                    symbol=row["symbol"],
-                    generator=row["generator"],
-                    rank=row["fts_rank"],
-                    content=content,
-                    content_truncated=content_truncated,
-                )
-            )
+            hits.append(self._search_hit_from_row(row, row["fts_rank"]))
             if len(hits) >= top_k:
                 break
         return hits

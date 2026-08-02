@@ -73,6 +73,11 @@ python -m aikb kb-symbol `
   --name init_idle `
   --top-k 20
 
+python -m aikb kb-retrieve `
+  --db $db `
+  --query "init_idle do_idle" `
+  --top-k 10
+
 python -m aikb kb-context `
   --db $db `
   --query "init_idle do_idle" `

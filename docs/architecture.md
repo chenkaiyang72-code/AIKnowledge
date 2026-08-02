@@ -530,7 +530,7 @@ AIKnowledge/
 
 ## 16. 下一步
 
-当前已经完成固定版本、ripgrep baseline、Tree-sitter、source-only 关系、blob 分析缓存、一层有界依赖扩展以及 Context Pack v1/retrieval trace 稳定契约。下一步把 SQLite FTS、精确 symbol 和有限关系扩展拆为可替换 retriever，先用 RRF 验证本地混合召回，再接入 Zoekt、pgvector 和跨仓路由；AI 客户端始终消费同一 Context Pack 契约。问题集按当前决定暂时保留但暂停人工复核，等混合召回可运行后恢复 Evidence Recall@K 对比。架构约束见 [ADR-0001](decisions/0001-source-only-indexing.md)，组件映射和任务见技术蓝图及实施计划。
+当前已经完成固定版本、ripgrep baseline、Tree-sitter、source-only 关系、blob 分析缓存、一层有界依赖扩展、Context Pack v1.1，以及 SQLite FTS/精确 symbol/有限关系扩展的确定性 RRF。下一步固定 storage/retriever provider 边界，把 catalog 领域模型落成 PostgreSQL migration，并接入 Zoekt 作为正式 lexical adapter；后续 pgvector 和跨仓路由继续复用同一 Context Pack 契约。问题集按当前决定暂时保留但暂停人工复核，等正式 lexical adapter 可运行后恢复 Evidence Recall@K 对比。架构约束见 [ADR-0001](decisions/0001-source-only-indexing.md)，组件映射和任务见技术蓝图及实施计划。
 
 ## 17. 调研依据
 

@@ -2,7 +2,7 @@
 
 最后更新：2026-08-02<br>
 当前阶段：Phase 0B 本地知识库启动骨架（进行中）<br>
-当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立不可变本地 snapshot、Tree-sitter C 结构化 chunk、source-only 关系、有界依赖扩展和 Context Pack v1。整个索引链路不编译源码；下一步建立可替换 retriever 接口与 lexical/symbol 混合召回，再接入 Zoekt 和 PostgreSQL。
+当前结论：按照用户决定，Phase 0A 问题复核暂时暂停；已建立不可变本地 snapshot、Tree-sitter C 结构化 chunk、source-only 关系、有界依赖扩展、Context Pack v1.1 和 lexical/symbol/relation RRF。整个索引链路不编译源码；下一步接入正式 Zoekt lexical adapter，并把 catalog 领域模型迁移到 PostgreSQL。
 
 ## 维护规则
 
@@ -96,11 +96,15 @@
 - 具体样例：`kb-symbol init_idle` 已同时返回 `include/linux/sched/task.h:64` 的声明和 `kernel/sched/core.c:7969-8027` 的定义；C header 与 C implementation 当前仍保留不同 logical symbol ID，后续必须基于语言族、签名、definition 数量和条件判断后再安全归并。
 - 已修正分析缓存边界：依赖扫描预算属于 snapshot index profile，不属于 blob analysis profile。默认扩展首次扫描为 52 hit/166 miss；只把文件预算从 500 改为 499 后为 218 hit/0 miss，证明范围策略变化可以复用全部未变化源码分析。
 - 默认配置 active snapshot 为 `snap_0b0e8c0e71ad7f720c31b8e2`；重复扫描返回相同 snapshot 且 `idempotent=true`，已存在的 superseded snapshot 可原子重新激活并保留事件记录。
-- 已实现 Context Pack v1 Pydantic schema 与 `kb-context-schema`：固定 `urn:aiknowledge:schema:context-pack:v1`，拒绝额外字段，版本字段必须显式存在。
+- 已实现 Context Pack v1.1 Pydantic schema 与 `kb-context-schema`：固定 `urn:aiknowledge:schema:context-pack:v1`，拒绝额外字段，版本字段必须显式存在。
 - 已实现 `kb-context`：输出不可变 snapshot、blob/chunk 哈希、稳定 citation、代码证据、symbol/关系候选、预算、coverage、gap 和确定性 retrieval trace；它不调用模型、不生成答案。
 - 已实现证据条数和近似 token 预算，逐候选记录 `selected`、`item_budget` 或 `token_budget`；无证据查询返回 `evidence_status=none`。
-- 真实 `init_idle do_idle` Context Pack 为 `context_1ee60c0a5dbd4e5cd34154bf`，trace 为 `trace_07a671354aac1843ba2fe5f1`：5 条证据、4,325 字符、约 1,082 token，重复构建 ID 相同。
-- Context Pack 自动化测试覆盖 schema 严格性、确定性、citation 回查、预算截断和 unknown/gap；自动化测试现为 18 个并全部通过。
+- 已实现 `retrieval.py` 通道接口和 RRF：`lexical_fts5` 权重 1.0、`symbol_exact` 权重 2.0、`relation_source` 权重 0.75，`k=60`；每条候选保留独立通道 rank 和贡献。
+- 已增加 `kb-retrieve` CLI，可独立检查 identifier terms、通道候选数、fused score、贡献和稳定 citation。
+- 真实 `init_idle do_idle` 中，`init_idle` 定义由纯 FTS 第 4 提升到混合检索第 1，头文件声明第 2，`do_idle` 定义第 3。
+- 已消除 symbol/relation 反查 FTS5 虚表的性能问题：改为从压缩 blob 按 chunk 行范围读取，并增加 chunk/relation 索引；真实混合检索从约 8.3 秒降到约 0.38 秒，完整 Context Pack 约 0.97 秒。
+- 真实 Context Pack v1.1 为 `context_8f20640aa1d2f62501cdb7ec`，trace 为 `trace_5c4ec50ca3e25a95b4b186d6`；第一条 `core.c:7961-8027` 同时得到三个通道支持。
+- 自动化测试覆盖 schema 严格性、确定性、citation 回查、预算截断、unknown/gap、精确符号提升、关系召回和 RRF 稳定性；现为 20 个并全部通过。
 
 ## 3. 还未完成的计划
 
@@ -112,9 +116,9 @@
 
 | 优先级 | 未完成事项 | 下一动作 | 完成条件 |
 | --- | --- | --- | --- |
-| P0 | 建立 retriever 接口和本地混合召回 | 把 SQLite FTS、精确 symbol、关系扩展拆成独立通道，用 RRF 合并并记录每路 trace | Context Pack 不依赖单一 FTS 排名，精确符号查询优先返回定义/声明 |
 | P0 | 建立 PostgreSQL schema | 把当前领域约束落成 PostgreSQL migration | 本地 Compose 环境可重复创建并通过约束测试 |
-| P1 | 建立正式 lexical 与混合检索 | 接入 Zoekt，再增加 symbol/vector 通道与 RRF | 能输出可解释 retrieval trace，并可直接替换 Context Pack 的当前召回器 |
+| P0 | 接入正式 Zoekt lexical adapter | 定义 provider interface，以 Zoekt 替换 FTS5 lexical 通道并保留回退 | `kb-retrieve`/Context Pack schema 不变，Zoekt 结果进入相同 RRF trace |
+| P1 | 增加 vector 通道并恢复评测 | 先接 pgvector，再用真实问题决定 embedding/reranker | Evidence Recall/MRR 有可复现提升，否则不启用模型 |
 | P1 | 扩大 source-only 规则覆盖 | 完善复杂 Kconfig/Kbuild 变量、更多语言 import 和注册模式 | 未解析/歧义统计可解释，并由真实问题决定规则优先级 |
 
 当前 SQLite 骨架已经实现 repository/snapshot/blob/file/chunk 的本地持久化，但以下仍未完成：
@@ -123,7 +127,7 @@
 - Kconfig/Kbuild 第一版规则只覆盖常见语法，复杂变量展开和跨文件条件仍需扩展。
 - C header 声明与 C implementation 定义尚未做受约束的 logical symbol 归并；不能仅按同名强制合并，否则配置互斥实现或多个定义会被错误标成唯一目标。
 - 尚未部署 Zoekt 正式代码文本索引。
-- 尚未实现 lexical、symbol、vector 和团队知识的混合召回及 RRF；当前 Context Pack 只使用 SQLite FTS5 加 symbol 元数据。
+- lexical、symbol、relation RRF 已实现；Zoekt、vector 和团队知识通道尚未接入。
 - Context Pack v1 已实现，但团队知识、ACL partial visibility 和 provider tokenizer 尚未接入。
 
 只有完成这些工作并通过 Phase 0B 指标后，才可以称为“成功建立了第一版单仓代码知识库”。
@@ -149,13 +153,13 @@
 | 5 | 实现 blob 级增量分析复用 | Codex | analysis artifact cache、命中/未命中统计 | 已完成，真实冷/热缓存对照通过 |
 | 6 | 实现依赖引导的范围扩展 | Codex | 有界依赖发现、解析统计、snapshot profile | 已完成，46 个种子扩展到 218 个文件且歧义率下降 |
 | 7 | 输出 Context Pack v1 | Codex | evidence、citation、snapshot、trace、预算 | 已完成，真实 Linux 快照和 unknown 查询验证通过 |
-| 8 | 建立 retriever 接口与本地 lexical/symbol RRF | Codex | 通道契约、统一候选、RRF、分通道 trace | 精确符号定义不再被高频调用点淹没 |
+| 8 | 建立 retriever 接口与本地 lexical/symbol/relation RRF | Codex | 通道契约、统一候选、RRF、分通道 trace | 已完成，`init_idle` 定义由第 4 提升到第 1 |
 | 9 | 建立 PostgreSQL/pgvector 环境并接入 Zoekt | Codex + 用户安装基础设施 | migration、正式 lexical index、健康检查 | 相同 schema 通过约束测试且全文结果可统一召回 |
 | 10 | 恢复评测问题集 | Codex + 用户 | 证据复核、负样本和黄金集 | 用真实问题验证 Phase 0B 是否达标 |
 
 ### 现在立即要做的动作
 
-下一项开发工作是建立 retriever interface：把当前 SQLite FTS5、精确 symbol occurrence 和有限关系扩展变成独立候选通道，使用 RRF 做确定性融合，并在 Context Pack trace 中保留各通道排名。完成本地契约后再接入 Zoekt adapter 和 PostgreSQL migration，避免基础设施细节反向污染产品 schema。整个过程仍不编译源码、不执行仓库脚本；问题集暂时不需要人工处理。
+下一项开发工作是定义正式 storage/retriever provider 边界，并把当前 schema 落成 PostgreSQL migration；随后接入 Zoekt 作为 lexical adapter，SQLite FTS5 保留为 bootstrap/回退。Zoekt 和 PostgreSQL 都只能消费已扫描的静态源码与派生产物，不得执行仓库构建。完成后恢复现有问题集的自动评测，人工证据复核仍可继续暂停。
 
 ## 相关文档
 
@@ -166,3 +170,4 @@
 - [第一批真实问题基线报告](../evals/reports/linux-6.18.40-first-batch.md)
 - [Phase 0B 本地知识库启动骨架](phase-0b-bootstrap.md)
 - [Context Pack v1](context-pack-v1.md)
+- [本地混合检索 v1](hybrid-retrieval.md)

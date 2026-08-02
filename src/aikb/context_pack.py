@@ -9,11 +9,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from aikb.catalog import Catalog, SearchHit
+from aikb.retrieval import ChannelContribution, retrieve_hybrid
 
 
 CONTEXT_PACK_SCHEMA = "urn:aiknowledge:schema:context-pack:v1"
-CONTEXT_PACK_VERSION = "1.0"
-CONTEXT_BUILDER_VERSION = "context-pack-v1+sqlite-fts5-v1"
+CONTEXT_PACK_VERSION = "1.1"
+CONTEXT_BUILDER_VERSION = "context-pack-v1.1+hybrid-rrf-v1"
 CHARS_PER_ESTIMATED_TOKEN = 4
 MIN_EVIDENCE_CHARS = 64
 
@@ -40,9 +41,18 @@ class ContextScope(StrictModel):
     partial_visibility: bool = False
 
 
+class RetrievalChannelContribution(StrictModel):
+    channel: Literal["lexical_fts5", "symbol_exact", "relation_source"]
+    rank: int
+    weight: float
+    reciprocal_score: float
+
+
 class RetrievalScore(StrictModel):
-    channel: Literal["sqlite_fts5"] = "sqlite_fts5"
+    channel: Literal["hybrid_rrf"] = "hybrid_rrf"
     rank: float
+    rrf_k: int
+    contributions: list[RetrievalChannelContribution]
 
 
 class CodeEvidence(StrictModel):
@@ -113,8 +123,9 @@ class ContextBudget(StrictModel):
 
 class TraceCandidate(StrictModel):
     chunk_id: str
-    channel: Literal["sqlite_fts5"] = "sqlite_fts5"
-    rank: float
+    channel: Literal["hybrid_rrf"] = "hybrid_rrf"
+    fused_score: float
+    contributions: list[RetrievalChannelContribution]
     selected: bool
     disposition: Literal["selected", "item_budget", "token_budget"]
 
@@ -125,6 +136,8 @@ class RetrievalTrace(StrictModel):
     normalized_query: str
     candidate_count: int
     selected_count: int
+    channel_candidate_counts: dict[str, int]
+    rrf_k: int
     candidates: list[TraceCandidate]
 
 
@@ -136,7 +149,7 @@ class ContextPack(StrictModel):
     )
 
     schema_uri: Literal["urn:aiknowledge:schema:context-pack:v1"]
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.1"]
     id: str
     query: str
     scope: ContextScope
@@ -243,6 +256,20 @@ def _build_symbol_contexts(
     return symbols
 
 
+def _contribution_models(
+    contributions: tuple[ChannelContribution, ...],
+) -> list[RetrievalChannelContribution]:
+    return [
+        RetrievalChannelContribution(
+            channel=item.channel,
+            rank=item.rank,
+            weight=item.weight,
+            reciprocal_score=item.reciprocal_score,
+        )
+        for item in contributions
+    ]
+
+
 def build_context_pack(
     catalog: Catalog,
     query: str,
@@ -268,23 +295,29 @@ def build_context_pack(
         snapshot_id=snapshot_id,
     )
     candidate_limit = min(100, max(max_evidence_items * 3, max_evidence_items))
-    hits = catalog.search(
+    retrieval_result = retrieve_hybrid(
+        catalog=catalog,
         query=normalized_query,
         top_k=candidate_limit,
         repository=repository,
         snapshot_id=snapshot_id,
     )
+    hybrid_hits = list(retrieval_result.hits)
+    hits = [item.hit for item in hybrid_hits]
     evidence_char_budget = evidence_token_budget * CHARS_PER_ESTIMATED_TOKEN
     evidence_chars_used = 0
     evidence: list[CodeEvidence] = []
     trace_candidates: list[TraceCandidate] = []
 
-    for hit in hits:
+    for hybrid_hit in hybrid_hits:
+        hit = hybrid_hit.hit
+        contribution_models = _contribution_models(hybrid_hit.contributions)
         if len(evidence) >= max_evidence_items:
             trace_candidates.append(
                 TraceCandidate(
                     chunk_id=hit.chunk_id,
-                    rank=hit.rank,
+                    fused_score=hybrid_hit.fused_score,
+                    contributions=contribution_models,
                     selected=False,
                     disposition="item_budget",
                 )
@@ -295,7 +328,8 @@ def build_context_pack(
             trace_candidates.append(
                 TraceCandidate(
                     chunk_id=hit.chunk_id,
-                    rank=hit.rank,
+                    fused_score=hybrid_hit.fused_score,
+                    contributions=contribution_models,
                     selected=False,
                     disposition="token_budget",
                 )
@@ -332,7 +366,11 @@ def build_context_pack(
                     f"{hit.repository}@{hit.revision}:"
                     f"{hit.path}:{hit.start_line}-{hit.end_line}"
                 ),
-                retrieval=RetrievalScore(rank=hit.rank),
+                retrieval=RetrievalScore(
+                    rank=hybrid_hit.fused_score,
+                    rrf_k=retrieval_result.rrf_k,
+                    contributions=contribution_models,
+                ),
                 content=content,
                 content_truncated=content_truncated,
             )
@@ -340,7 +378,8 @@ def build_context_pack(
         trace_candidates.append(
             TraceCandidate(
                 chunk_id=hit.chunk_id,
-                rank=hit.rank,
+                fused_score=hybrid_hit.fused_score,
+                contributions=contribution_models,
                 selected=True,
                 disposition="selected",
             )
@@ -383,13 +422,19 @@ def build_context_pack(
         "candidates": [
             {
                 "chunk_id": candidate.chunk_id,
-                "rank": round(candidate.rank, 12),
+                "fused_score": round(candidate.fused_score, 12),
+                "contributions": [
+                    contribution.model_dump(mode="json")
+                    for contribution in candidate.contributions
+                ],
                 "selected": candidate.selected,
                 "disposition": candidate.disposition,
             }
             for candidate in trace_candidates
         ],
         "symbols": [symbol.name for symbol in symbols],
+        "channel_candidate_counts": retrieval_result.channel_candidate_counts,
+        "rrf_k": retrieval_result.rrf_k,
         "budget": budget.model_dump(mode="json"),
     }
     trace_id = _stable_id("trace", trace_payload)
@@ -399,6 +444,8 @@ def build_context_pack(
         normalized_query=normalized_query,
         candidate_count=len(trace_candidates),
         selected_count=len(evidence),
+        channel_candidate_counts=retrieval_result.channel_candidate_counts,
+        rrf_k=retrieval_result.rrf_k,
         candidates=trace_candidates,
     )
 

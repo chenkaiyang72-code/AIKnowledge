@@ -14,6 +14,7 @@ from aikb.ingestion import (
     ingest_source,
     load_scope,
 )
+from aikb.retrieval import retrieve_hybrid
 
 
 DEFAULT_DATABASE = Path(".aikb/catalog.db")
@@ -75,6 +76,16 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--top-k", type=int, default=10)
     search_parser.add_argument("--repository")
     search_parser.add_argument("--snapshot-id")
+
+    retrieve_parser = subparsers.add_parser(
+        "kb-retrieve",
+        help="run deterministic lexical/symbol/relation RRF retrieval",
+    )
+    retrieve_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE)
+    retrieve_parser.add_argument("--query", required=True)
+    retrieve_parser.add_argument("--top-k", type=int, default=10)
+    retrieve_parser.add_argument("--repository")
+    retrieve_parser.add_argument("--snapshot-id")
 
     symbol_parser = subparsers.add_parser(
         "kb-symbol",
@@ -144,6 +155,32 @@ def main(argv: list[str] | None = None) -> int:
                     "top_k": args.top_k,
                     "result_count": len(hits),
                     "results": [hit.as_dict() for hit in hits],
+                }
+            elif args.command == "kb-retrieve":
+                result = retrieve_hybrid(
+                    catalog=catalog,
+                    query=args.query,
+                    top_k=args.top_k,
+                    repository=args.repository,
+                    snapshot_id=args.snapshot_id,
+                )
+                report = {
+                    "query": result.query,
+                    "identifier_terms": list(result.identifier_terms),
+                    "rrf_k": result.rrf_k,
+                    "channel_candidate_counts": result.channel_candidate_counts,
+                    "result_count": len(result.hits),
+                    "results": [
+                        {
+                            **item.hit.as_dict(),
+                            "fused_score": item.fused_score,
+                            "contributions": [
+                                contribution.as_dict()
+                                for contribution in item.contributions
+                            ],
+                        }
+                        for item in result.hits
+                    ],
                 }
             elif args.command == "kb-symbol":
                 report = catalog.find_symbol(

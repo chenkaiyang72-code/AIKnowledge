@@ -10,6 +10,7 @@ KNOWLEDGE_COMMANDS = {
     "kb-ingest",
     "kb-stats",
     "kb-search",
+    "kb-retrieve",
     "kb-symbol",
     "kb-context",
     "kb-context-schema",
@@ -28,6 +29,7 @@ def main(argv: list[str] | None = None) -> int:
             "  kb-ingest     scan source into an immutable local snapshot\n"
             "  kb-stats      show catalog and active snapshot statistics\n"
             "  kb-search     search chunks and return versioned citations\n"
+            "  kb-retrieve   fuse lexical, symbol, and relation candidates with RRF\n"
             "  kb-symbol     show source-only occurrences and relation candidates\n\n"
             "  kb-context    build a budgeted Context Pack with retrieval trace\n"
             "  kb-context-schema  print Context Pack v1 JSON Schema\n\n"
