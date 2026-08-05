@@ -1,8 +1,8 @@
 # AIKnowledge 项目进展
 
 最后更新：2026-08-06<br>
-当前阶段：Phase 1A 只读 MCP（本地工程与 Claude Code 验收完成，Cursor UI 验收待执行）<br>
-当前结论：跨仓 solution snapshot 和只读 MCP 已形成一条端到端链路。Phase 0C 已在共享 PostgreSQL 17 + pgvector + Zoekt CI 通过 43/43 测试；官方 SDK 固定为已 GA 的 `mcp==2.0.0`，三个工具可通过内存 client、真实 stdio 子进程和 stateless Streamable HTTP 调用，Claude Code `2.1.222` 真实连接状态为 `Connected`。连续 100 次协议请求稳定，SQLite 以只读模式打开，未认证 HTTP 强制只绑定 loopback；远程团队访问仍必须等待 Phase 1B 身份/ACL/RLS。
+当前阶段：Phase 1B 团队安全试点（principal/team/grant/RLS 本地实现完成，共享 CI 待终验）<br>
+当前结论：跨仓 solution snapshot 和只读 MCP 已形成端到端链路，MCP 里程碑在 PostgreSQL 17 + pgvector + Zoekt 共享 CI 通过 50/50 测试，见 [run 31046518729](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31046518729)。Phase 1B 已增加 security domain、OIDC identity principal、team/member、repository grant、非 owner `aikb_reader` 与查询前 RLS；secured `PostgresCatalog` 每个事务强制 principal/domain，solution 可见成员在数据库层过滤。远程 HTTP 仍必须等待 JWT/OIDC 和本次 RLS 真实 CI 完成。
 
 ## 维护规则
 
@@ -19,7 +19,7 @@
 | 2 | Phase 0B 结构化检索 | 建立第一版单仓代码知识索引 | 不可变 snapshot、Tree-sitter、source-only 关系索引、Zoekt、pgvector、混合检索、Context Pack | Evidence Recall@10、版本准确率和负样本指标达到门槛 | 工程实现完成，正式验收待人工复核 |
 | 3 | Phase 0C 跨仓 PoC | 让一个问题可以在一致版本下检索多个仓库 | solution snapshot、仓库路由、跨仓关系、跨仓引用 | 至少 10 个跨仓问题通过评测 | 完成：10 题指标 1.0，共享 CI 43/43 通过 |
 | 4 | Phase 1A 只读 MCP | 把知识检索能力提供给现有 AI 客户端 | `/mcp/read`、scope/context tools、Cursor 和 Claude Code 接入 | 两类客户端可以稳定取得相同 Context Pack | 本地工程与 Claude Code 完成，Cursor UI 待验收 |
-| 5 | Phase 1B 团队安全试点 | 支持多人安全共享 | OIDC、仓库 ACL、PostgreSQL RLS、数据出域策略、审计、增量索引 | 越权测试零泄露，索引可增量更新 | 未开始 |
+| 5 | Phase 1B 团队安全试点 | 支持多人安全共享 | OIDC、仓库 ACL、PostgreSQL RLS、数据出域策略、审计、增量索引 | 越权测试零泄露，索引可增量更新 | 进行中：principal/team/grant/RLS 本地完成 |
 | 6 | Phase 1C 知识进化闭环 | 让团队提问和反馈转化为受治理的共享知识 | feedback、gap、claim、review、publish、最小管理 UI | 至少一条真实知识完成完整审核发布流程 | 未开始 |
 | 7 | Phase 2 及以后 | 支持开发态代码、更多知识源和规模化部署 | workspace overlay、ADR/Issue/PR connector、更多语言、分片和高可用 | 根据试点指标逐项决定 | 未开始 |
 
@@ -160,6 +160,19 @@
 - 已提供 Cursor `.cursor/mcp.json`、Claude Code `claude mcp add` 与本机 HTTP 配置；Claude Code `2.1.222` 已在隔离配置中真实启动 `aikb-mcp` 并显示 `Connected`，用户原配置未改动。Cursor CLI 不提供等价健康检查，UI 调用验收待执行。
 - 当前本地共发现 50 项测试：44 项通过，6 项依赖 PostgreSQL/Zoekt 集成环境的测试按设计跳过。
 
+Phase 1A 提交 `e475042` 已在共享 PostgreSQL 17 + pgvector + Zoekt 环境通过 50/50 测试，见 [run 31046518729](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31046518729)。
+
+### 2.6 Phase 1B 已完成的本地工程工作项
+
+- PostgreSQL schema v4 新增 `security_domain`、`principal`、`security_team`、`security_team_member`、`repository_grant`，OIDC issuer + subject 唯一映射 principal。
+- repository grant 支持 principal 或 team 二选一、read/write/admin、到期和撤销；暂停 domain/principal/team 均不会通过授权函数。
+- 新增 NOLOGIN/NOSUPERUSER/NOBYPASSRLS `aikb_reader`。远程读取事务必须 `SET LOCAL ROLE`，再以事务级 GUC 传入服务端认证后的 principal/domain。
+- repository/snapshot、blob/file/chunk、symbol/relation、embedding、solution/member 和 retrieval trace 已启用面向 reader 的 RLS；reader 不可直接读取 principal/team/grant 表。
+- `PostgresCatalog` 接受 `PostgresPrincipalContext` 后对每次查询强制 reader role 和 principal/domain，应用查询即使遗漏仓库条件也由数据库先过滤。
+- PostgreSQL solution resolver 使用同一安全事务，只返回可见 member；通过不可变 `member_count` 判断 partial visibility，不输出隐藏名称或数量。
+- 已编写真实非 owner 集成用例：Alice/team 只能读取 visible repository/chunk/member，Bob/direct grant 只能读取 hidden 一侧，错误 domain 为零行，trace 只能按当前 principal/domain 写入和读取。
+- 当前本地共发现 51 项测试：44 项通过，7 项依赖 PostgreSQL/Zoekt 集成环境的测试按设计跳过；Alembic `0001 -> 0004` 离线 SQL 和 schema 单测通过。RLS 真实 PostgreSQL 终验待本次共享 CI。
+
 ## 3. 还未完成的计划
 
 ### 3.1 Phase 0A：按用户决定暂时暂停
@@ -171,9 +184,9 @@
 | 优先级 | 未完成事项 | 下一动作 | 完成条件 |
 | --- | --- | --- | --- |
 | P0 | 完成实际客户端矩阵 | 在本机 Cursor UI 按文档连接 stdio 并调用三个工具；Claude Code 已完成真实健康检查 | Cursor 与 Claude Code 取得相同 solution scope、evidence 与 citation |
-| P0 | 建立正式 principal/ACL 边界 | 设计并实现用户、团队、repository grant 与 query-before-filter | 客户端不能自行声明 allow-set，隐藏仓库在 DB/应用两层均不可见 |
-| P0 | 增加 PostgreSQL RLS 与审计 | principal/security domain session context、RLS policy、retrieval trace 写入 | 越权测试为零泄露，每次 MCP 调用可按 principal/trace 审计 |
-| P1 | 接入远程 OAuth/OIDC | token verifier、audience/scope/expiry/revocation、Protected Resource Metadata | 非 loopback HTTP 只有有效的 server-audience token 可访问 |
+| P0 | 终验 principal/ACL/RLS 边界 | 在共享 PostgreSQL 17 运行 schema v4 migration 和双 principal 非 owner 越权测试 | 隐藏仓库在 repository/chunk/solution/trace 层均为零泄露 |
+| P0 | 接入远程 OAuth/OIDC | 固定 PyJWT/JWKS verifier、audience/scope/expiry/not-before/revocation、Protected Resource Metadata | 非 loopback HTTP 只有有效的 server-audience token 可访问 |
+| P0 | 完成 MCP retrieval audit | 把认证 principal、工具、Context Pack trace 与成功/拒绝结果写入隔离 trace | 每次远程 MCP 调用可按 principal/trace 审计且正文不进入日志 |
 | P1 | 修复候选池外检索缺口 | 优先分析 vmalloc/kmalloc 文档、oldconfig 行范围和 module 问题 | 不靠目录硬编码，新增召回或 source-only 规则由证据和回归测试支撑 |
 
 本地扫描和 PostgreSQL 共享存储的首条链路已经打通，但以下仍未完成：
@@ -183,7 +196,7 @@
 - C header 声明与 C implementation 定义尚未做受约束的 logical symbol 归并；不能仅按同名强制合并，否则配置互斥实现或多个定义会被错误标成唯一目标。
 - Zoekt adapter 和可重复容器流程已完成；团队环境的常驻服务、分片调度、监控与滚动更新尚未部署。
 - lexical（Zoekt/FTS）、symbol、relation RRF 已实现；semantic 候选重排只作为离线实验能力保留，vector 全仓召回和团队知识通道尚未接入。
-- Context Pack v1.3 已实现跨仓 partial visibility；团队知识、正式 OIDC/ACL/RLS 和 provider tokenizer 尚未接入。
+- Context Pack v1.3 已实现跨仓 partial visibility；正式 ACL/RLS 本地实现待共享 CI，OIDC、团队知识和 provider tokenizer 尚未接入。
 
 只有完成这些工作并通过 Phase 0B 指标后，才可以称为“成功建立了第一版单仓代码知识库”。
 
@@ -191,7 +204,7 @@
 
 - 跨仓 solution snapshot、路由基线和 PoC 部分可见性已完成；真实团队问题人工验收及大规模选择性路由尚未完成。
 - Claude Code 只读 MCP 接入已验证；Cursor UI 与 VS Code/Copilot 兼容验证尚未完成。
-- OIDC、ACL、RLS、数据出域策略、审计和安全测试尚未实现。
+- principal/team/grant/RLS 基础已实现；OIDC、数据出域策略、完整审计和更广的安全测试尚未完成。
 - feedback、gap、claim、review、publish 知识进化闭环尚未实现。
 - Web 管理控制台、workspace overlay 和更多知识源 connector 尚未实现。
 
@@ -216,11 +229,11 @@
 | 13 | 实验 vector/reranker | Codex | provider 边界、可缓存 embedding/score、与当前 hybrid 的消融报告 | 已完成：候选融合四项无回退；保留实验接口，按 ADR-0002 暂缓全量向量索引 |
 | 14 | 实现跨仓 solution snapshot | Codex | schema、固定成员版本、resolver、两阶段检索、partial visibility、跨仓 Context Pack | 已完成：10 题 routing recall 与版本准确率均为 1.0，共享 CI 43/43 通过 |
 | 15 | 实现只读 MCP MVP | Codex | 固定 SDK、read-only tools、stdio/Streamable HTTP、协议测试 | 本地工程与 Claude Code 真实连接完成；Cursor UI 验收待执行 |
-| 16 | 实现团队身份与 ACL 边界 | Codex | principal、repository grant、RLS、审计、OAuth verifier | 越权测试零泄露，远程 HTTP 可安全开放 |
+| 16 | 实现团队身份与 ACL 边界 | Codex | principal、repository grant、RLS、审计、OAuth verifier | 进行中：schema/RLS 本地完成；真实 CI、OIDC 和 MCP audit 待完成 |
 
 ### 现在立即要做的动作
 
-下一项工作直接建立 Phase 1B principal、repository grant、query-before-filter、PostgreSQL RLS 与 retrieval audit；同时保留 Cursor UI 调用验收。远程 HTTP 在 token audience 与数据库权限双重强制完成前继续禁止非 loopback 绑定。
+下一项工作先让共享 PostgreSQL 17 终验 schema v4 与非 owner RLS；通过后立即实现 PyJWT/JWKS OIDC verifier、MCP Protected Resource Metadata 和 retrieval audit。远程 HTTP 在 token audience 与数据库权限双重强制完成前继续禁止非 loopback 绑定，同时保留 Cursor UI 调用验收。
 
 ## 相关文档
 
@@ -242,3 +255,5 @@
 - [跨仓 solution snapshot、检索与部分可见性](cross-repo-solution.md)
 - [只读 MCP 服务与客户端配置](mcp-read-server.md)
 - [ADR-0003：MCP v2 只读接入](decisions/0003-mcp-v2-read-only.md)
+- [团队身份、仓库授权与 RLS](team-security.md)
+- [ADR-0004：principal、团队授权与 PostgreSQL RLS](decisions/0004-principal-acl-rls.md)

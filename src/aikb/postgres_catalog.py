@@ -1,20 +1,39 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from dataclasses import dataclass
+from collections.abc import Iterator
 from typing import Any
 
-from sqlalchemy import Engine, bindparam, create_engine, text
+from sqlalchemy import Connection, Engine, bindparam, create_engine, text
 
 from aikb.catalog import SearchHit
 from aikb.storage import LexicalSearchResult, SourceLocation
 
 
+@dataclass(frozen=True)
+class PostgresPrincipalContext:
+    principal_id: str
+    security_domain_id: str
+
+    def __post_init__(self) -> None:
+        if not self.principal_id.strip() or not self.security_domain_id.strip():
+            raise ValueError("principal and security domain must not be empty")
+
+
 class PostgresCatalog:
     """PostgreSQL read adapter implementing the ReadCatalog protocol."""
 
-    def __init__(self, url: str, engine: Engine | None = None):
+    def __init__(
+        self,
+        url: str,
+        engine: Engine | None = None,
+        principal_context: PostgresPrincipalContext | None = None,
+    ):
         self.engine = engine or create_engine(url)
         self._owns_engine = engine is None
+        self.principal_context = principal_context
 
     def __enter__(self) -> PostgresCatalog:
         return self
@@ -25,6 +44,23 @@ class PostgresCatalog:
     def close(self) -> None:
         if self._owns_engine:
             self.engine.dispose()
+
+    @contextmanager
+    def read_connection(self) -> Iterator[Connection]:
+        """Apply a transaction-local principal before every secured query."""
+
+        with self.engine.connect() as connection:
+            if self.principal_context is not None:
+                connection.execute(text("SET LOCAL ROLE aikb_reader"))
+                connection.execute(
+                    text("SELECT set_config('aikb.principal_id',:value,true)"),
+                    {"value": self.principal_context.principal_id},
+                )
+                connection.execute(
+                    text("SELECT set_config('aikb.security_domain_id',:value,true)"),
+                    {"value": self.principal_context.security_domain_id},
+                )
+            yield connection
 
     @staticmethod
     def _hit(row: Any, rank: float) -> SearchHit:
@@ -80,7 +116,7 @@ class PostgresCatalog:
             "FROM snapshot s JOIN repository r ON r.id = s.repository_id "
             f"WHERE {scope_sql} ORDER BY r.name, s.id"
         )
-        with self.engine.connect() as connection:
+        with self.read_connection() as connection:
             rows = connection.execute(statement, parameters).mappings().all()
         if snapshot_id and not rows:
             raise ValueError(f"snapshot not found in requested scope: {snapshot_id}")
@@ -127,7 +163,7 @@ class PostgresCatalog:
             f"AND {scope_sql} "
             "ORDER BY lexical_rank DESC, f.path, c.start_line LIMIT :limit"
         )
-        with self.engine.connect() as connection:
+        with self.read_connection() as connection:
             rows = connection.execute(statement, parameters).mappings().all()
         hits: list[SearchHit] = []
         per_file: dict[tuple[str, str], int] = {}
@@ -180,7 +216,7 @@ class PostgresCatalog:
         )
         hits: list[SearchHit] = []
         seen: set[tuple[str, str]] = set()
-        with self.engine.connect() as connection:
+        with self.read_connection() as connection:
             for location in locations:
                 if location.line < 1:
                     continue
@@ -213,7 +249,7 @@ class PostgresCatalog:
     ) -> list[SearchHit]:
         statement = text(query).bindparams(bindparam("names", expanding=True))
         parameters.update({"names": names, "limit": top_k * 10})
-        with self.engine.connect() as connection:
+        with self.read_connection() as connection:
             rows = connection.execute(statement, parameters).mappings().all()
         hits: list[SearchHit] = []
         seen: set[str] = set()
@@ -326,7 +362,7 @@ class PostgresCatalog:
             + scope_sql
             + " ORDER BY r.name,sf.path,rel.start_line,rel.kind LIMIT :limit"
         )
-        with self.engine.connect() as connection:
+        with self.read_connection() as connection:
             occurrence_rows = connection.execute(occurrence_sql, parameters).mappings().all()
             relation_rows = connection.execute(relation_sql, parameters).mappings().all()
         occurrences = [self._with_citation(row, "path") for row in occurrence_rows]

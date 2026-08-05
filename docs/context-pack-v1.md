@@ -78,7 +78,7 @@ python -m aikb kb-solution-context `
 
 - 正式 lexical adapter 已支持 Zoekt；SQLite FTS5 和 PostgreSQL simple-text FTS 只用于本地 bootstrap 与服务不可用时回退。
 - `team_knowledge` 尚未接入已审核知识条目。
-- solution PoC 可以根据显式允许仓库集合生成 `partial_visibility`，且隐藏成员不会进入 evidence、symbol、link 或 trace；正式团队服务仍必须由 OIDC/ACL/RLS 计算允许集合，不能信任客户端参数。
+- solution PoC 可以根据显式允许仓库集合生成 `partial_visibility`，且隐藏成员不会进入 evidence、symbol、link 或 trace；PostgreSQL principal/team grant 与 RLS 已开始在查询前强制，正式团队服务仍必须完成 OIDC 映射，不能信任客户端参数。
 - vector 检索仍是待评测 adapter；是否启用由真实问题集的增量收益决定。
 - solution scope 已能让 `scope.snapshots` 同时包含固定的多个仓库版本；几十仓以上的选择性 repository router 尚未实现。
 

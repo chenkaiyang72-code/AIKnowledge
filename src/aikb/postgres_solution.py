@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import Engine, text
 
+from aikb.postgres_catalog import PostgresCatalog, PostgresPrincipalContext
 from aikb.ingestion import stable_id
 from aikb.solution import (
     ResolvedSolutionScope,
@@ -254,6 +255,7 @@ def resolve_postgres_solution_scope(
     solution: str,
     solution_snapshot_id: str | None = None,
     allowed_repositories: set[str] | None = None,
+    principal_context: PostgresPrincipalContext | None = None,
 ) -> ResolvedSolutionScope:
     clauses = ["sol.name=:solution"]
     parameters: dict[str, Any] = {"solution": solution}
@@ -262,10 +264,15 @@ def resolve_postgres_solution_scope(
         parameters["snapshot_id"] = solution_snapshot_id
     else:
         clauses.append("ss.state='active'")
-    with engine.connect() as connection:
+    secured_catalog = PostgresCatalog(
+        "",
+        engine=engine,
+        principal_context=principal_context,
+    )
+    with secured_catalog.read_connection() as connection:
         snapshot = connection.execute(
             text(
-                "SELECT ss.id,ss.revision,ss.manifest_digest,ss.state "
+                "SELECT ss.id,ss.revision,ss.manifest_digest,ss.state,ss.member_count "
                 "FROM solution_snapshot ss JOIN solution sol ON sol.id=ss.solution_id "
                 f"WHERE {' AND '.join(clauses)}"
             ),
@@ -301,5 +308,5 @@ def resolve_postgres_solution_scope(
         manifest_digest=snapshot["manifest_digest"],
         state=snapshot["state"],
         snapshots=tuple(visible),
-        partial_visibility=len(visible) != len(members),
+        partial_visibility=len(visible) != snapshot["member_count"],
     )

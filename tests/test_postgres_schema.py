@@ -15,13 +15,14 @@ from sqlalchemy.schema import CreateTable
 from aikb.catalog import Catalog
 from aikb.context_pack import build_context_pack, build_solution_context_pack
 from aikb.ingestion import ingest_source
-from aikb.postgres_catalog import PostgresCatalog
+from aikb.postgres_catalog import PostgresCatalog, PostgresPrincipalContext
 from aikb.postgres_publish import PostgresSnapshotPublisher
 from aikb.postgres_solution import (
     PostgresSolutionPublisher,
     resolve_postgres_solution_scope,
 )
 from aikb.postgres_schema_v1 import metadata
+from aikb.postgres_security_schema import security_metadata
 from aikb.postgres_solution_schema import solution_metadata
 from aikb.solution import SolutionManifest
 
@@ -46,12 +47,21 @@ EXPECTED_TABLES = {
     "embedding_model",
     "chunk_embedding",
     "retrieval_trace",
+    "security_domain",
+    "principal",
+    "security_team",
+    "security_team_member",
+    "repository_grant",
 }
 
 
 class PostgresSchemaUnitTests(unittest.TestCase):
     def test_schema_contains_versioned_catalog_and_vector_tables(self) -> None:
-        current_tables = set(metadata.tables) | set(solution_metadata.tables)
+        current_tables = (
+            set(metadata.tables)
+            | set(solution_metadata.tables)
+            | set(security_metadata.tables)
+        )
         self.assertEqual(current_tables, EXPECTED_TABLES)
         self.assertNotIn("chunk_fts", metadata.tables)
         snapshot_indexes = {index.name for index in metadata.tables["snapshot"].indexes}
@@ -103,9 +113,324 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             extension = connection.execute(
                 text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             ).scalar_one()
-        self.assertEqual(version, "3")
+        self.assertEqual(version, "4")
         self.assertTrue(extension)
         self.assertIn("content", {column["name"] for column in inspector.get_columns("chunk")})
+
+    def test_reader_rls_filters_repository_content_solution_members_and_traces(self) -> None:
+        suffix = uuid.uuid4().hex
+        domain_id = f"domain_{suffix}"
+        alice_id = f"principal_alice_{suffix}"
+        bob_id = f"principal_bob_{suffix}"
+        team_id = f"team_{suffix}"
+        visible_repository_id = f"repo_visible_{suffix}"
+        hidden_repository_id = f"repo_hidden_{suffix}"
+        visible_repository = f"visible-{suffix}"
+        hidden_repository = f"hidden-{suffix}"
+        visible_snapshot = f"snap_visible_{suffix}"
+        hidden_snapshot = f"snap_hidden_{suffix}"
+        visible_blob = ("a" + suffix)[:64].ljust(64, "a")
+        hidden_blob = ("b" + suffix)[:64].ljust(64, "b")
+        visible_file = f"file_visible_{suffix}"
+        hidden_file = f"file_hidden_{suffix}"
+        visible_chunk = f"chunk_visible_{suffix}"
+        hidden_chunk = f"chunk_hidden_{suffix}"
+        solution_id = f"solution_{suffix}"
+        solution_snapshot_id = f"solution_snapshot_{suffix}"
+        alice_trace = f"trace_alice_{suffix}"
+
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO security_domain(id,name) VALUES (:id,:name)"
+                ),
+                {"id": domain_id, "name": f"domain-{suffix}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO principal(id,security_domain_id,issuer,subject,display_name) "
+                    "VALUES (:alice,:domain,'https://issuer.example',:alice_subject,'Alice'),"
+                    "(:bob,:domain,'https://issuer.example',:bob_subject,'Bob')"
+                ),
+                {
+                    "alice": alice_id,
+                    "bob": bob_id,
+                    "domain": domain_id,
+                    "alice_subject": f"alice-{suffix}",
+                    "bob_subject": f"bob-{suffix}",
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO security_team(id,security_domain_id,name) "
+                    "VALUES (:id,:domain,:name)"
+                ),
+                {"id": team_id, "domain": domain_id, "name": f"kernel-{suffix}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO security_team_member(team_id,principal_id) "
+                    "VALUES (:team,:principal)"
+                ),
+                {"team": team_id, "principal": alice_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO repository(id,name,source_kind,source_uri) VALUES "
+                    "(:visible_id,:visible_name,'test','test://visible'),"
+                    "(:hidden_id,:hidden_name,'test','test://hidden')"
+                ),
+                {
+                    "visible_id": visible_repository_id,
+                    "visible_name": visible_repository,
+                    "hidden_id": hidden_repository_id,
+                    "hidden_name": hidden_repository,
+                },
+            )
+            for snapshot_id, repository_id, digest in (
+                (visible_snapshot, visible_repository_id, "1"),
+                (hidden_snapshot, hidden_repository_id, "2"),
+            ):
+                connection.execute(
+                    text(
+                        "INSERT INTO snapshot(id,repository_id,revision,source_digest,"
+                        "manifest_digest,index_profile_digest,state,file_count,blob_count,"
+                        "chunk_count) VALUES (:id,:repository,'rev',:source,:manifest,"
+                        ":profile,'active',1,1,1)"
+                    ),
+                    {
+                        "id": snapshot_id,
+                        "repository": repository_id,
+                        "source": digest * 64,
+                        "manifest": (str(int(digest) + 2)) * 64,
+                        "profile": (str(int(digest) + 4)) * 64,
+                    },
+                )
+            for blob_id in (visible_blob, hidden_blob):
+                connection.execute(
+                    text(
+                        "INSERT INTO blob(id,size_bytes,compressed_content) "
+                        "VALUES (:id,1,:content)"
+                    ),
+                    {"id": blob_id, "content": b"x"},
+                )
+            for file_id, snapshot_id, blob_id, path in (
+                (visible_file, visible_snapshot, visible_blob, "visible.c"),
+                (hidden_file, hidden_snapshot, hidden_blob, "hidden.c"),
+            ):
+                connection.execute(
+                    text(
+                        "INSERT INTO source_file(id,snapshot_id,blob_id,path,language,"
+                        "line_count,size_bytes,decode_status,parse_status) VALUES "
+                        "(:id,:snapshot,:blob,:path,'c',1,1,'utf8','structured')"
+                    ),
+                    {"id": file_id, "snapshot": snapshot_id, "blob": blob_id, "path": path},
+                )
+            for chunk_id, snapshot_id, file_id, content in (
+                (visible_chunk, visible_snapshot, visible_file, "visible evidence"),
+                (hidden_chunk, hidden_snapshot, hidden_file, "hidden evidence"),
+            ):
+                connection.execute(
+                    text(
+                        "INSERT INTO chunk(id,snapshot_id,file_id,ordinal,kind,start_line,"
+                        "end_line,content_hash,generator,content) VALUES "
+                        "(:id,:snapshot,:file,0,'window',1,1,:hash,'test',:content)"
+                    ),
+                    {
+                        "id": chunk_id,
+                        "snapshot": snapshot_id,
+                        "file": file_id,
+                        "hash": ("c" if "visible" in content else "d") * 64,
+                        "content": content,
+                    },
+                )
+            connection.execute(
+                text(
+                    "INSERT INTO solution(id,name) VALUES (:id,:name)"
+                ),
+                {"id": solution_id, "name": f"solution-{suffix}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO solution_snapshot(id,solution_id,revision,manifest_digest,"
+                    "manifest_json,state,member_count) VALUES "
+                    "(:id,:solution,'r1',:digest,CAST(:manifest AS jsonb),'active',2)"
+                ),
+                {
+                    "id": solution_snapshot_id,
+                    "solution": solution_id,
+                    "digest": "e" * 64,
+                    "manifest": '{"schema_version":"1"}',
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO solution_snapshot_member(solution_snapshot_id,"
+                    "repository_id,snapshot_id,role,ordinal) VALUES "
+                    "(:solution,:visible_repo,:visible_snapshot,'visible',0),"
+                    "(:solution,:hidden_repo,:hidden_snapshot,'hidden',1)"
+                ),
+                {
+                    "solution": solution_snapshot_id,
+                    "visible_repo": visible_repository_id,
+                    "visible_snapshot": visible_snapshot,
+                    "hidden_repo": hidden_repository_id,
+                    "hidden_snapshot": hidden_snapshot,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO repository_grant(id,security_domain_id,repository_id,"
+                    "team_id,permission) VALUES (:id,:domain,:repository,:team,'read')"
+                ),
+                {
+                    "id": f"grant_team_{suffix}",
+                    "domain": domain_id,
+                    "repository": visible_repository_id,
+                    "team": team_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO repository_grant(id,security_domain_id,repository_id,"
+                    "principal_id,permission) VALUES (:id,:domain,:repository,:principal,'read')"
+                ),
+                {
+                    "id": f"grant_bob_{suffix}",
+                    "domain": domain_id,
+                    "repository": hidden_repository_id,
+                    "principal": bob_id,
+                },
+            )
+
+        def visible_rows(principal_id: str, security_domain_id: str) -> tuple[list[str], list[str], list[str]]:
+            with self.engine.connect() as connection:
+                transaction = connection.begin()
+                connection.execute(text("SET LOCAL ROLE aikb_reader"))
+                connection.execute(
+                    text("SELECT set_config('aikb.principal_id',:value,true)"),
+                    {"value": principal_id},
+                )
+                connection.execute(
+                    text("SELECT set_config('aikb.security_domain_id',:value,true)"),
+                    {"value": security_domain_id},
+                )
+                repositories = connection.execute(
+                    text("SELECT name FROM repository ORDER BY name")
+                ).scalars().all()
+                contents = connection.execute(
+                    text("SELECT content FROM chunk ORDER BY content")
+                ).scalars().all()
+                members = connection.execute(
+                    text(
+                        "SELECT repository_id FROM solution_snapshot_member "
+                        "ORDER BY repository_id"
+                    )
+                ).scalars().all()
+                transaction.rollback()
+            return repositories, contents, members
+
+        try:
+            with self.engine.connect() as connection:
+                role = connection.execute(
+                    text(
+                        "SELECT rolsuper,rolbypassrls,rolcanlogin FROM pg_roles "
+                        "WHERE rolname='aikb_reader'"
+                    )
+                ).one()
+            self.assertEqual(tuple(role), (False, False, False))
+
+            alice_rows = visible_rows(alice_id, domain_id)
+            self.assertEqual(alice_rows[0], [visible_repository])
+            self.assertEqual(alice_rows[1], ["visible evidence"])
+            self.assertEqual(alice_rows[2], [visible_repository_id])
+
+            secured_adapter = PostgresCatalog(
+                POSTGRES_URL,
+                engine=self.engine,
+                principal_context=PostgresPrincipalContext(
+                    principal_id=alice_id,
+                    security_domain_id=domain_id,
+                ),
+            )
+            resolved = secured_adapter.resolve_snapshots()
+            self.assertEqual(
+                [(row["repository"], row["snapshot_id"]) for row in resolved],
+                [(visible_repository, visible_snapshot)],
+            )
+            secured_hits = secured_adapter.search("evidence")
+            self.assertEqual([hit.content for hit in secured_hits], ["visible evidence"])
+            with self.assertRaises(ValueError):
+                secured_adapter.resolve_snapshots(repository=hidden_repository)
+            secured_solution = resolve_postgres_solution_scope(
+                self.engine,
+                solution=f"solution-{suffix}",
+                principal_context=PostgresPrincipalContext(
+                    principal_id=alice_id,
+                    security_domain_id=domain_id,
+                ),
+            )
+            self.assertTrue(secured_solution.partial_visibility)
+            self.assertEqual(
+                [member["repository"] for member in secured_solution.snapshots],
+                [visible_repository],
+            )
+
+            bob_rows = visible_rows(bob_id, domain_id)
+            self.assertEqual(bob_rows[0], [hidden_repository])
+            self.assertEqual(bob_rows[1], ["hidden evidence"])
+            self.assertEqual(bob_rows[2], [hidden_repository_id])
+
+            wrong_domain_rows = visible_rows(alice_id, f"wrong-{domain_id}")
+            self.assertEqual(wrong_domain_rows, ([], [], []))
+
+            with self.engine.begin() as connection:
+                connection.execute(text("SET LOCAL ROLE aikb_reader"))
+                connection.execute(
+                    text("SELECT set_config('aikb.principal_id',:value,true)"),
+                    {"value": alice_id},
+                )
+                connection.execute(
+                    text("SELECT set_config('aikb.security_domain_id',:value,true)"),
+                    {"value": domain_id},
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO retrieval_trace(id,principal_id,security_domain_id,"
+                        "query_hash,scope,retriever_versions,budget,result_summary) VALUES "
+                        "(:id,:principal,:domain,:hash,CAST('{}' AS jsonb),"
+                        "CAST('{}' AS jsonb),CAST('{}' AS jsonb),CAST('{}' AS jsonb))"
+                    ),
+                    {
+                        "id": alice_trace,
+                        "principal": alice_id,
+                        "domain": domain_id,
+                        "hash": "f" * 64,
+                    },
+                )
+                traces = connection.execute(
+                    text("SELECT id FROM retrieval_trace")
+                ).scalars().all()
+                self.assertEqual(traces, [alice_trace])
+        finally:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("DELETE FROM retrieval_trace WHERE id=:id"), {"id": alice_trace}
+                )
+                connection.execute(
+                    text("DELETE FROM solution WHERE id=:id"), {"id": solution_id}
+                )
+                connection.execute(
+                    text("DELETE FROM repository WHERE id IN (:visible,:hidden)"),
+                    {"visible": visible_repository_id, "hidden": hidden_repository_id},
+                )
+                connection.execute(
+                    text("DELETE FROM blob WHERE id IN (:visible,:hidden)"),
+                    {"visible": visible_blob, "hidden": hidden_blob},
+                )
+                connection.execute(
+                    text("DELETE FROM security_domain WHERE id=:id"), {"id": domain_id}
+                )
 
     def test_only_one_active_snapshot_is_allowed_per_repository(self) -> None:
         suffix = uuid.uuid4().hex

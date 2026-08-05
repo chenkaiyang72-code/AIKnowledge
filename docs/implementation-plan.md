@@ -221,6 +221,16 @@
 | GIT-002 | webhook 增量索引和原子 snapshot 发布 | fresh indexing |
 | DATA-004 | provenance 失效、re-anchor 和 snapshot 保留 | lifecycle jobs |
 
+### 当前实现状态（2026-08-06）
+
+| ID | 状态 | 已实现内容 | 仍需推进 |
+| --- | --- | --- | --- |
+| AUTH-002 | 部分完成 | schema v4 已建立 security domain、OIDC identity principal、team/member | JWT verifier、目录映射和管理接口 |
+| AUTH-003 | 部分完成 | principal/team repository grant 支持到期、撤销和暂停状态 | GitHub/GitLab ACL 同步 connector |
+| AUTH-004 | 本地完成、共享 CI 待验收 | 非 owner `aikb_reader`、事务 principal/domain、16 类内容表 RLS、solution partial visibility | PostgreSQL 17 真实迁移与越权终验、向量性能基准 |
+| SEC-001 | 设计完成 | audience/issuer/scope/expiry/revocation 与 Protected Resource Metadata 边界已固定 | 实现并接入远程 MCP |
+| SEC-004 | 部分完成 | 双 principal、错误 domain、隐藏 repository/chunk/solution member 测试已编写 | 真实 CI、prompt injection 与恶意仓库套件 |
+
 ### 验收
 
 - 越权测试和跨安全域查询泄露为零。

@@ -8,7 +8,7 @@
 
 ## 当前阶段
 
-项目已完成 Phase 0C 跨仓 PoC 与 Phase 1A 只读 MCP 的本地工程验收，Claude Code 真实 stdio 客户端已连接成功；下一步是 Cursor UI 验收与 Phase 1B 身份权限边界。真实问题集已保留，按当前决定暂缓人工复核：
+项目已完成 Phase 0C 跨仓 PoC 与 Phase 1A 只读 MCP 的工程验收，Claude Code 真实 stdio 客户端已连接成功；当前正在实现 Phase 1B principal、团队授权和 PostgreSQL RLS，远程 HTTP 仍保持关闭。真实问题集已保留，按当前决定暂缓人工复核：
 
 - [项目总体设计](docs/architecture.md)
 - [技术蓝图：架构、技术与开源组件映射](docs/technical-blueprint.md)
@@ -27,6 +27,8 @@
 - [跨仓 solution snapshot、检索与部分可见性](docs/cross-repo-solution.md)
 - [只读 MCP：工具、stdio/HTTP 与客户端配置](docs/mcp-read-server.md)
 - [ADR-0003：采用 MCP v2 只读接入](docs/decisions/0003-mcp-v2-read-only.md)
+- [团队身份、仓库授权与 PostgreSQL RLS](docs/team-security.md)
+- [ADR-0004：principal、团队授权与 RLS](docs/decisions/0004-principal-acl-rls.md)
 
 首版技术路线：Python 模块化单体与独立 worker，使用 PostgreSQL/pgvector 保存元数据和向量，使用 Tree-sitter、源码标识符/关系提取器和 Zoekt 建立无需编译的代码索引，并通过只读 MCP 网关向不同 AI 客户端提供带版本和引用的 Context Pack。
 

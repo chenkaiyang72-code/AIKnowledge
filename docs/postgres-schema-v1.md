@@ -53,7 +53,7 @@ schema v1 包含 15 张基础业务表：
 
 schema v2 增加 `chunk.content` 和 `to_tsvector('simple', content)` GIN index。正文用于稳定 evidence 读取；GIN 只作为 PostgreSQL bootstrap/故障回退 lexical 通道，正式服务通过已实现的 `ZoektReadCatalog` 使用 Zoekt。
 
-schema v3 通过独立 `postgres_solution_schema` 和 migration `0003_solution_snapshot` 增加 `solution`、`solution_snapshot`、`solution_snapshot_event`、`solution_snapshot_member` 四张跨仓版本表，总计 19 张业务表。独立 metadata 避免新的表定义污染 `0001` 所引用的冻结 v1 metadata。
+schema v3 通过独立 `postgres_solution_schema` 和 migration `0003_solution_snapshot` 增加 `solution`、`solution_snapshot`、`solution_snapshot_event`、`solution_snapshot_member` 四张跨仓版本表。schema v4 再通过独立 `postgres_security_schema` 和 `0004_principal_acl_rls` 增加 security domain、principal、team/member 与 repository grant，总计 24 张业务表，并为源码、关系、embedding、solution 和 trace 建立 RLS。独立 metadata 避免新表定义污染 `0001` 所引用的冻结 v1 metadata。
 
 关键约束：
 
@@ -115,8 +115,8 @@ solution publisher 使用独立 advisory lock、成员存在性检查、完整 m
 本地无需 PostgreSQL即可验证 metadata 和离线 DDL。设置 `AIKB_TEST_POSTGRES_URL` 后，集成测试会实际执行 Alembic upgrade，并检查：
 
 - pgvector extension 可用；
-- 19 张业务表存在；
-- schema version 为 3；
+- 24 张业务表存在；
+- schema version 为 4；
 - 同一 repository 插入第二个 active snapshot 会失败。
 - PostgreSQL read adapter 能直接构造 Context Pack，且多词 lexical fallback 使用 OR 语义；
 - publisher 支持小批次复制、幂等重试、新旧 snapshot 切换、历史 snapshot 重新激活和注入失败后的完整回滚。
@@ -130,6 +130,6 @@ GitHub Actions 使用 PostgreSQL 17 pgvector service 执行这组测试。本地
 
 - scanner 当前仍先写本地 SQLite 再显式 publish；后台 index orchestrator、队列重试和自动发布尚未实现。
 - PostgreSQL lexical 仍是 bootstrap/故障回退；Zoekt adapter 已实现，但团队环境的常驻 Zoekt 部署与运维尚未完成。
-- organization/team/repository ACL 和 RLS policy 尚未加入；PoC 只用显式允许仓库集合验证不泄露输出，`retrieval_trace` 已预留 principal/security domain 字段。
+- organization/team/repository grant 和 RLS schema 已实现，真实 PostgreSQL 终验尚待本次共享 CI；远程服务仍需完成 OIDC token verifier 后才能使用该边界。
 - vector adapter、模型选择和 ANN index 尚未实现。
 - 生产备份、连接池、分区和数据保留策略尚未验证。
