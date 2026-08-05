@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import sys
 
-from aikb import evaluation, knowledge_cli
+from aikb import evaluation, knowledge_cli, semantic_evaluation
 
 
 EVALUATION_COMMANDS = {"inspect", "baseline", "structured"}
+SEMANTIC_COMMANDS = {"semantic-ablation"}
 KNOWLEDGE_COMMANDS = {
     "kb-ingest",
     "kb-stats",
@@ -27,7 +28,8 @@ def main(argv: list[str] | None = None) -> int:
             "Evaluation commands:\n"
             "  inspect       verify a source snapshot\n"
             "  baseline      run the Phase 0A lexical baseline\n"
-            "  structured    compare catalog lexical retrieval with hybrid RRF\n\n"
+            "  structured    compare catalog lexical retrieval with hybrid RRF\n"
+            "  semantic-ablation  rerank a validated deep candidate report\n\n"
             "Knowledge-base commands:\n"
             "  kb-ingest     scan source into an immutable local snapshot\n"
             "  kb-stats      show catalog and active snapshot statistics\n"
@@ -44,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
     command = arguments[0]
     if command in EVALUATION_COMMANDS:
         return evaluation.main(arguments)
+    if command in SEMANTIC_COMMANDS:
+        return semantic_evaluation.main(arguments[1:])
     if command in KNOWLEDGE_COMMANDS:
         return knowledge_cli.main(arguments)
     print(f"error: unknown command {command!r}; use --help", file=sys.stderr)
