@@ -4,7 +4,7 @@ import posixpath
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Iterable
 
 
 RELATION_GENERATOR = "source-relations-v2"
@@ -525,10 +525,24 @@ def extract_dependency_references(
     return references
 
 
+def build_path_basename_index(
+    available_paths: Iterable[str],
+) -> dict[str, tuple[str, ...]]:
+    """Index repository paths by basename for bounded include resolution."""
+    grouped: dict[str, list[str]] = {}
+    for path in available_paths:
+        grouped.setdefault(PurePosixPath(path).name, []).append(path)
+    return {
+        basename: tuple(sorted(paths))
+        for basename, paths in grouped.items()
+    }
+
+
 def include_candidates(
     source_path: str,
     target: str,
     available_paths: set[str],
+    paths_by_basename: dict[str, tuple[str, ...]] | None = None,
 ) -> list[str]:
     target = target.replace("\\", "/")
     candidates: set[str] = set()
@@ -542,7 +556,13 @@ def include_candidates(
     if include_path in available_paths:
         candidates.add(include_path)
     suffix = f"/{target}"
-    for path in available_paths:
+    basename = PurePosixPath(target).name
+    suffix_pool: Iterable[str]
+    if paths_by_basename is None:
+        suffix_pool = available_paths
+    else:
+        suffix_pool = paths_by_basename.get(basename, ())
+    for path in suffix_pool:
         if path.endswith(suffix):
             candidates.add(path)
     return sorted(candidates)

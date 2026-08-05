@@ -22,6 +22,7 @@ from aikb.evaluation import inspect_source
 from aikb.source_relations import (
     AMBIGUOUS_CANDIDATE,
     SOURCE_INFERRED,
+    build_path_basename_index,
     extract_dependency_references,
     extract_source_facts,
     include_candidates,
@@ -541,6 +542,7 @@ def ingest_source(
         for candidate in scan.files
     }
     available_paths = set(file_ids_by_path)
+    paths_by_basename = build_path_basename_index(available_paths)
 
     existing = catalog.connection.execute(
         "SELECT state FROM snapshot WHERE id = ?", (snapshot_id,)
@@ -1038,7 +1040,10 @@ def ingest_source(
                 if pending["kind"] == "kbuild_contains" and target_path.endswith(".o"):
                     target_path = target_path[:-2] + ".c"
                 path_candidates = include_candidates(
-                    pending["relative_path"], target_path, available_paths
+                    pending["relative_path"],
+                    target_path,
+                    available_paths,
+                    paths_by_basename,
                 )
                 if len(path_candidates) == 1:
                     target_file_id = file_ids_by_path[path_candidates[0]]

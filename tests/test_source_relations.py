@@ -6,6 +6,7 @@ from aikb.source_relations import (
     AMBIGUOUS_CANDIDATE,
     SOURCE_EXACT,
     SOURCE_INFERRED,
+    build_path_basename_index,
     extract_source_facts,
     include_candidates,
 )
@@ -73,10 +74,31 @@ class SourceRelationTests(unittest.TestCase):
         )
 
     def test_include_candidates_normalize_parent_segments(self) -> None:
+        available_paths = {"include/demo.h", "arch/x86/include/demo.h"}
         candidates = include_candidates(
-            "kernel/demo.c", "../include/demo.h", {"include/demo.h"}
+            "kernel/demo.c",
+            "../include/demo.h",
+            available_paths,
+            build_path_basename_index(available_paths),
         )
         self.assertEqual(candidates, ["include/demo.h"])
+
+    def test_include_candidates_use_basename_index(self) -> None:
+        available_paths = {
+            "drivers/net/foo.c",
+            "include/linux/foo.h",
+            "arch/x86/include/linux/foo.h",
+        }
+        candidates = include_candidates(
+            "drivers/net/foo.c",
+            "linux/foo.h",
+            available_paths,
+            build_path_basename_index(available_paths),
+        )
+        self.assertEqual(
+            candidates,
+            ["arch/x86/include/linux/foo.h", "include/linux/foo.h"],
+        )
 
     def test_deep_preprocessor_tree_extracts_facts_iteratively(self) -> None:
         depth = 1_100
