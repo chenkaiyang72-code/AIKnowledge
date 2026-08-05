@@ -565,6 +565,102 @@ def run_structured_evaluation(
     }
 
 
+def render_structured_markdown(report: dict[str, Any]) -> str:
+    retrievers = report["retrievers"]
+    lexical = retrievers["lexical"]
+    hybrid = retrievers["hybrid_rrf"]
+    top_k = report["top_k"]
+    lexical_metrics = lexical["metrics"]
+    hybrid_metrics = hybrid["metrics"]
+    snapshots = report["scope"]["resolved_snapshots"]
+    snapshot_text = ", ".join(
+        f"`{item['repository']}@{item['revision']}` (`{item['snapshot_id']}`)"
+        for item in snapshots
+    )
+
+    def percent(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:.4f}"
+
+    lines = [
+        "# 结构化检索自动评测报告",
+        "",
+        f"- 问题数：{report['dataset']['questions']}",
+        f"- 标注证据范围数：{report['dataset']['required_evidence_ranges']}",
+        f"- Top K：{top_k}",
+        f"- 查询来源：`{report['query_source']}`",
+        f"- Snapshot：{snapshot_text}",
+        "- 证据状态：沿用数据集现有标注；未经过人工复核的 draft 不能视为冻结黄金集。",
+        "",
+        "## 汇总指标",
+        "",
+        "| 检索器 | File Recall | Evidence Range Recall | File MRR | Range MRR | 完整/部分/未命中 |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for result in (lexical, hybrid):
+        metrics = result["metrics"]
+        lines.append(
+            "| "
+            f"`{result['name']}` | "
+            f"{percent(metrics[f'file_recall_at_{top_k}'])} | "
+            f"{percent(metrics[f'evidence_range_recall_at_{top_k}'])} | "
+            f"{percent(metrics['file_mrr'])} | "
+            f"{percent(metrics['evidence_range_mrr'])} | "
+            f"{metrics['questions_complete']}/"
+            f"{metrics['questions_partial']}/"
+            f"{metrics['questions_missed']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## 增量",
+            "",
+            f"- File Recall Δ：{hybrid_metrics[f'file_recall_at_{top_k}'] - lexical_metrics[f'file_recall_at_{top_k}']:+.4f}",
+            f"- Evidence Range Recall Δ：{hybrid_metrics[f'evidence_range_recall_at_{top_k}'] - lexical_metrics[f'evidence_range_recall_at_{top_k}']:+.4f}",
+            f"- File MRR Δ：{hybrid_metrics['file_mrr'] - lexical_metrics['file_mrr']:+.4f}",
+            f"- Evidence Range MRR Δ：{hybrid_metrics['evidence_range_mrr'] - lexical_metrics['evidence_range_mrr']:+.4f}",
+            "",
+            "## 逐题结果",
+            "",
+            "| 问题 | Lexical | Hybrid RRF | Lexical 范围 | Hybrid 范围 |",
+            "| --- | --- | --- | ---: | ---: |",
+        ]
+    )
+    lexical_by_id = {
+        item["id"]: item for item in lexical_metrics["per_question"]
+    }
+    hybrid_by_id = {
+        item["id"]: item for item in hybrid_metrics["per_question"]
+    }
+    for question_id in lexical_by_id:
+        lexical_item = lexical_by_id[question_id]
+        hybrid_item = hybrid_by_id[question_id]
+        lexical_found = sum(
+            item["rank"] is not None for item in lexical_item["range_matches"]
+        )
+        hybrid_found = sum(
+            item["rank"] is not None for item in hybrid_item["range_matches"]
+        )
+        total = len(lexical_item["range_matches"])
+        lines.append(
+            f"| `{question_id}` | {lexical_item['status']} | "
+            f"{hybrid_item['status']} | {lexical_found}/{total} | "
+            f"{hybrid_found}/{total} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## 判定原则",
+            "",
+            "- File Recall 用于和旧版按文件评测保持可比。",
+            "- Evidence Range Recall 要求返回 chunk 与标注行范围重叠，是更严格的 Context Pack 证据指标。",
+            "- 本报告只评价检索证据，不评价模型生成答案。",
+            "- vector/reranker 必须相对当前 hybrid 基线取得可重复增量才允许进入正式通道。",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIKnowledge Phase 0A evaluation CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -588,6 +684,11 @@ def build_parser() -> argparse.ArgumentParser:
     structured_parser.add_argument("--questions", type=Path, required=True)
     structured_parser.add_argument("--db", type=Path, required=True)
     structured_parser.add_argument("--output", type=Path, required=True)
+    structured_parser.add_argument(
+        "--markdown-output",
+        type=Path,
+        help="optionally write a deterministic Markdown summary",
+    )
     structured_parser.add_argument("--top-k", type=int, default=10)
     structured_parser.add_argument("--repository")
     structured_parser.add_argument("--snapshot-id")
@@ -647,6 +748,13 @@ def main(argv: list[str] | None = None) -> int:
         with args.output.open("w", encoding="utf-8", newline="\n") as stream:
             json.dump(report, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
+        if args.command == "structured" and args.markdown_output:
+            args.markdown_output.parent.mkdir(parents=True, exist_ok=True)
+            args.markdown_output.write_text(
+                render_structured_markdown(report),
+                encoding="utf-8",
+                newline="\n",
+            )
         summary = (
             _metric_summary(report["metrics"])
             if args.command == "baseline"

@@ -13,6 +13,7 @@ from aikb.evaluation import (
     evaluate_structured_results,
     load_questions,
     rank_question,
+    render_structured_markdown,
     run_structured_evaluation,
 )
 from aikb.ingestion import ingest_source
@@ -172,6 +173,10 @@ class EvaluationTests(unittest.TestCase):
             ][0]["contributions"]
         }
         self.assertIn("symbol_exact", contribution_channels)
+        markdown = render_structured_markdown(report)
+        self.assertIn("# 结构化检索自动评测报告", markdown)
+        self.assertIn("Evidence Range Recall", markdown)
+        self.assertIn("`q1` | complete | complete | 1/1 | 1/1", markdown)
 
 
 if __name__ == "__main__":
