@@ -53,7 +53,7 @@ schema v1 包含 15 张基础业务表：
 
 schema v2 增加 `chunk.content` 和 `to_tsvector('simple', content)` GIN index。正文用于稳定 evidence 读取；GIN 只作为 PostgreSQL bootstrap/故障回退 lexical 通道，正式服务通过已实现的 `ZoektReadCatalog` 使用 Zoekt。
 
-schema v3 通过独立 `postgres_solution_schema` 和 migration `0003_solution_snapshot` 增加 `solution`、`solution_snapshot`、`solution_snapshot_event`、`solution_snapshot_member` 四张跨仓版本表。schema v4 再通过独立 `postgres_security_schema` 和 `0004_principal_acl_rls` 增加 security domain、principal、team/member 与 repository grant，总计 24 张业务表，并为源码、关系、embedding、solution 和 trace 建立 RLS。独立 metadata 避免新表定义污染 `0001` 所引用的冻结 v1 metadata。
+schema v3 通过独立 `postgres_solution_schema` 和 migration `0003_solution_snapshot` 增加 `solution`、`solution_snapshot`、`solution_snapshot_event`、`solution_snapshot_member` 四张跨仓版本表。schema v4 再通过独立 `postgres_security_schema` 和 `0004_principal_acl_rls` 增加 security domain、principal、team/member 与 repository grant，并为源码、关系、embedding、solution 和 trace 建立 RLS。schema v5 增加 token 撤销时间、最小认证目录角色和 `mcp_audit_event`，总计 25 张业务表。独立 metadata 避免新表定义污染 `0001` 所引用的冻结 v1 metadata。
 
 关键约束：
 
@@ -115,8 +115,8 @@ solution publisher 使用独立 advisory lock、成员存在性检查、完整 m
 本地无需 PostgreSQL即可验证 metadata 和离线 DDL。设置 `AIKB_TEST_POSTGRES_URL` 后，集成测试会实际执行 Alembic upgrade，并检查：
 
 - pgvector extension 可用；
-- 24 张业务表存在；
-- schema version 为 4；
+- 25 张业务表存在；
+- schema version 为 5；
 - 同一 repository 插入第二个 active snapshot 会失败。
 - PostgreSQL read adapter 能直接构造 Context Pack，且多词 lexical fallback 使用 OR 语义；
 - publisher 支持小批次复制、幂等重试、新旧 snapshot 切换、历史 snapshot 重新激活和注入失败后的完整回滚。
@@ -124,12 +124,12 @@ solution publisher 使用独立 advisory lock、成员存在性检查、完整 m
 
 GitHub Actions 使用 PostgreSQL 17 pgvector service 执行这组测试。本地机器不需要安装 Docker 或 PostgreSQL。
 
-2026-08-02 的首次完整 CI 已通过：23 个测试全部成功，包括 Alembic upgrade、pgvector extension 和唯一 active snapshot 约束，见 [run 30750390588](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30750390588)。schema v2 和 PostgreSQL `ReadCatalog` adapter 随后完成 24/24 测试，包括 PostgreSQL Context Pack 端到端验证，见 [run 30750652975](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30750652975)。原子 publisher 加入后完成 25/25 测试，覆盖幂等、切换、重新激活和回滚，见 [run 30751565583](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30751565583)。schema v3 与 solution publisher 随后在 PostgreSQL 17 + pgvector + Zoekt 环境完成 43/43 测试，见 [run 31043795023](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31043795023)。
+2026-08-02 的首次完整 CI 已通过：23 个测试全部成功，包括 Alembic upgrade、pgvector extension 和唯一 active snapshot 约束，见 [run 30750390588](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30750390588)。schema v2 和 PostgreSQL `ReadCatalog` adapter 随后完成 24/24 测试，包括 PostgreSQL Context Pack 端到端验证，见 [run 30750652975](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30750652975)。原子 publisher 加入后完成 25/25 测试，覆盖幂等、切换、重新激活和回滚，见 [run 30751565583](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30751565583)。schema v3 与 solution publisher 随后在 PostgreSQL 17 + pgvector + Zoekt 环境完成 43/43 测试，见 [run 31043795023](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31043795023)。MCP 里程碑完成 50/50，见 [run 31046518729](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31046518729)；schema v4 非 owner RLS、双 principal 越权和 secured catalog 随后完成 51/51，见 [run 31047764753](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31047764753)。
 
 ## 尚未完成
 
 - scanner 当前仍先写本地 SQLite 再显式 publish；后台 index orchestrator、队列重试和自动发布尚未实现。
 - PostgreSQL lexical 仍是 bootstrap/故障回退；Zoekt adapter 已实现，但团队环境的常驻 Zoekt 部署与运维尚未完成。
-- organization/team/repository grant 和 RLS schema 已实现，真实 PostgreSQL 终验尚待本次共享 CI；远程服务仍需完成 OIDC token verifier 后才能使用该边界。
+- organization/team/repository grant 与 RLS 已在真实 PostgreSQL 通过；schema v5 OIDC directory、token 撤销和 MCP audit 等待本次共享 CI 终验。
 - vector adapter、模型选择和 ANN index 尚未实现。
 - 生产备份、连接池、分区和数据保留策略尚未验证。

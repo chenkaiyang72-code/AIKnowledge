@@ -4,14 +4,19 @@ import json
 import asyncio
 import socket
 import sys
+import time
 from contextlib import redirect_stderr
 from io import StringIO
 import tempfile
 import unittest
 from pathlib import Path
 
+import httpx2
 from mcp.client import Client
 from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.settings import AuthSettings
 import uvicorn
 
 from aikb.catalog import Catalog
@@ -292,6 +297,83 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
             uvicorn_server.should_exit = True
             await asyncio.wait_for(task, timeout=10)
 
+    async def test_authenticated_http_returns_rfc9728_challenge_and_accepts_token(self) -> None:
+        class StaticVerifier:
+            async def verify_token(self, token: str) -> AccessToken | None:
+                if token != "valid-token":
+                    return None
+                return AccessToken(
+                    token=token,
+                    client_id="cursor",
+                    scopes=["aiknowledge.read"],
+                    expires_at=int(time.time()) + 300,
+                    resource="https://kb.example/mcp/read",
+                    subject="alice",
+                    claims={
+                        "iss": "https://issuer.example",
+                        "aikb_principal_id": "principal-alice",
+                        "aikb_security_domain_id": "domain-kernel",
+                    },
+                )
+
+        server = create_mcp_server(
+            MCPReadConfig(
+                postgres_engine=object(),
+                token_verifier=StaticVerifier(),
+                auth_settings=AuthSettings(
+                    issuer_url="https://issuer.example",
+                    resource_server_url="https://kb.example/mcp/read",
+                    required_scopes=["aiknowledge.read"],
+                ),
+            )
+        )
+        app = server.streamable_http_app(
+            streamable_http_path="/mcp/read",
+            stateless_http=True,
+            json_response=True,
+        )
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        uvicorn_server = uvicorn.Server(
+            uvicorn.Config(app, host="127.0.0.1", port=port, log_level="critical")
+        )
+        task = asyncio.create_task(uvicorn_server.serve())
+        try:
+            for _ in range(100):
+                if uvicorn_server.started:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertTrue(uvicorn_server.started)
+            base_url = f"http://127.0.0.1:{port}"
+            async with httpx2.AsyncClient(base_url=base_url) as anonymous:
+                denied = await anonymous.post("/mcp/read", json={})
+                metadata = await anonymous.get(
+                    "/.well-known/oauth-protected-resource/mcp/read"
+                )
+            self.assertEqual(denied.status_code, 401)
+            self.assertIn("resource_metadata=", denied.headers["www-authenticate"])
+            self.assertEqual(metadata.status_code, 200)
+            self.assertEqual(metadata.json()["resource"], "https://kb.example/mcp/read")
+            self.assertEqual(
+                metadata.json()["authorization_servers"],
+                ["https://issuer.example"],
+            )
+
+            async with httpx2.AsyncClient(
+                headers={"Authorization": "Bearer valid-token"}
+            ) as authenticated:
+                transport = streamable_http_client(
+                    f"{base_url}/mcp/read",
+                    http_client=authenticated,
+                )
+                async with Client(transport) as client:
+                    listed = await client.list_tools()
+            self.assertEqual(len(listed.tools), 3)
+        finally:
+            uvicorn_server.should_exit = True
+            await asyncio.wait_for(task, timeout=10)
+
     def test_unauthenticated_http_rejects_non_loopback_binding(self) -> None:
         stderr = StringIO()
         with redirect_stderr(stderr):
@@ -307,6 +389,22 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, 2)
         self.assertIn("restricted to loopback", stderr.getvalue())
+
+    def test_postgres_http_rejects_missing_oidc_configuration(self) -> None:
+        stderr = StringIO()
+        with redirect_stderr(stderr):
+            result = mcp_main(
+                [
+                    "mcp-serve",
+                    "--transport",
+                    "streamable-http",
+                    "--postgres-url",
+                    "postgresql+psycopg://example.invalid/aikb",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertIn("requires OIDC", stderr.getvalue())
 
 
 if __name__ == "__main__":

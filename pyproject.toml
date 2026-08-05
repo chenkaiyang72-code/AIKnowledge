@@ -28,6 +28,9 @@ semantic = [
 mcp = [
   "mcp==2.0.0",
 ]
+auth = [
+  "PyJWT[crypto]==2.13.0",
+]
 
 [project.scripts]
 aikb = "aikb.cli:main"

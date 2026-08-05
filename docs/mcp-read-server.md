@@ -92,6 +92,8 @@ python -m aikb mcp-serve `
 
 当前服务使用 `stateless_http=true`、JSON response 和 1 MiB 请求体上限。因为 Phase 1A 还没有认证，CLI 强制 HTTP 只能绑定 `127.0.0.1`、`localhost` 或 `::1`；传入 `0.0.0.0` 或远程地址会直接失败。团队远程地址必须等 Phase 1B 接入 OIDC/OAuth、token audience 校验、repository ACL 与 RLS 后开放。
 
+Phase 1B 已实现认证模式：只有同时配置 PostgreSQL RLS catalog、OIDC issuer/JWKS、规范 resource server URL 和 required scope 时，CLI 才允许非 loopback binding；完整部署见[远程 MCP 文档](remote-mcp-auth.md)。
+
 不要用固定 header 把其他服务的 token 原样透传。MCP 官方安全指南明确禁止 token passthrough，并要求远程 server 验证 token 是签发给自身 audience 的：[MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)。
 
 ## PoC 可见性

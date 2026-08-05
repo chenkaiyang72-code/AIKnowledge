@@ -11,17 +11,24 @@ from sqlalchemy import Connection, create_engine, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateTable
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.settings import AuthSettings
 
 from aikb.catalog import Catalog
 from aikb.context_pack import build_context_pack, build_solution_context_pack
 from aikb.ingestion import ingest_source
+from aikb.mcp_server import MCPReadConfig, MCPReadService
 from aikb.postgres_catalog import PostgresCatalog, PostgresPrincipalContext
+from aikb.oidc import PostgresPrincipalDirectory
 from aikb.postgres_publish import PostgresSnapshotPublisher
 from aikb.postgres_solution import (
     PostgresSolutionPublisher,
     resolve_postgres_solution_scope,
 )
 from aikb.postgres_schema_v1 import metadata
+from aikb.postgres_auth_schema import auth_metadata
 from aikb.postgres_security_schema import security_metadata
 from aikb.postgres_solution_schema import solution_metadata
 from aikb.solution import SolutionManifest
@@ -52,6 +59,7 @@ EXPECTED_TABLES = {
     "security_team",
     "security_team_member",
     "repository_grant",
+    "mcp_audit_event",
 }
 
 
@@ -61,6 +69,7 @@ class PostgresSchemaUnitTests(unittest.TestCase):
             set(metadata.tables)
             | set(solution_metadata.tables)
             | set(security_metadata.tables)
+            | set(auth_metadata.tables)
         )
         self.assertEqual(current_tables, EXPECTED_TABLES)
         self.assertNotIn("chunk_fts", metadata.tables)
@@ -113,9 +122,13 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             extension = connection.execute(
                 text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             ).scalar_one()
-        self.assertEqual(version, "4")
+        self.assertEqual(version, "5")
         self.assertTrue(extension)
         self.assertIn("content", {column["name"] for column in inspector.get_columns("chunk")})
+        self.assertIn(
+            "tokens_valid_after",
+            {column["name"] for column in inspector.get_columns("principal")},
+        )
 
     def test_reader_rls_filters_repository_content_solution_members_and_traces(self) -> None:
         suffix = uuid.uuid4().hex
@@ -339,6 +352,25 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
                     )
                 ).one()
             self.assertEqual(tuple(role), (False, False, False))
+            with self.engine.connect() as connection:
+                authenticator_role = connection.execute(
+                    text(
+                        "SELECT rolsuper,rolbypassrls,rolcanlogin FROM pg_roles "
+                        "WHERE rolname='aikb_authenticator'"
+                    )
+                ).one()
+            self.assertEqual(tuple(authenticator_role), (False, False, False))
+
+            directory = PostgresPrincipalDirectory(POSTGRES_URL, engine=self.engine)
+            mapped = directory.resolve("https://issuer.example", f"alice-{suffix}")
+            self.assertIsNotNone(mapped)
+            assert mapped is not None
+            self.assertEqual(mapped.principal_id, alice_id)
+            self.assertEqual(mapped.security_domain_id, domain_id)
+            self.assertEqual(mapped.tokens_valid_after, 0)
+            self.assertIsNone(
+                directory.resolve("https://issuer.example", f"unknown-{suffix}")
+            )
 
             alice_rows = visible_rows(alice_id, domain_id)
             self.assertEqual(alice_rows[0], [visible_repository])
@@ -375,6 +407,82 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
                 [member["repository"] for member in secured_solution.snapshots],
                 [visible_repository],
             )
+
+            service = MCPReadService(
+                MCPReadConfig(
+                    postgres_engine=self.engine,
+                    token_verifier=object(),
+                    auth_settings=AuthSettings(
+                        issuer_url="https://issuer.example",
+                        resource_server_url="https://kb.example/mcp/read",
+                        required_scopes=["aiknowledge.read"],
+                    ),
+                )
+            )
+            access_token = AccessToken(
+                token="verified-test-token",
+                client_id="integration-test",
+                scopes=["aiknowledge.read"],
+                expires_at=None,
+                resource="https://kb.example/mcp/read",
+                subject=f"alice-{suffix}",
+                claims={
+                    "iss": "https://issuer.example",
+                    "aikb_principal_id": alice_id,
+                    "aikb_security_domain_id": domain_id,
+                },
+            )
+            auth_token = auth_context_var.set(AuthenticatedUser(access_token))
+            try:
+                pack = service.execute_read(
+                    tool_name="aikb_context_search",
+                    request_id=f"request-success-{suffix}",
+                    scope_kind="repository",
+                    scope_identifier=visible_repository,
+                    query_text="evidence",
+                    operation=lambda: service.search_context(
+                        query="evidence",
+                        repository=visible_repository,
+                        max_evidence_items=2,
+                    ),
+                    summarize=lambda result: {"evidence_count": len(result.evidence)},
+                )
+                self.assertEqual(
+                    [item.repository for item in pack.evidence],
+                    [visible_repository],
+                )
+                with self.assertRaises(ValueError):
+                    service.execute_read(
+                        tool_name="aikb_context_search",
+                        request_id=f"request-error-{suffix}",
+                        scope_kind="repository",
+                        scope_identifier=hidden_repository,
+                        query_text="hidden evidence",
+                        operation=lambda: service.search_context(
+                            query="hidden evidence",
+                            repository=hidden_repository,
+                        ),
+                        summarize=lambda result: {
+                            "evidence_count": len(result.evidence)
+                        },
+                    )
+            finally:
+                auth_context_var.reset(auth_token)
+
+            with self.engine.connect() as connection:
+                audit_rows = connection.execute(
+                    text(
+                        "SELECT outcome,query_hash,trace_id,scope_summary,result_summary "
+                        "FROM mcp_audit_event WHERE principal_id=:principal "
+                        "ORDER BY request_id"
+                    ),
+                    {"principal": alice_id},
+                ).mappings().all()
+            self.assertEqual([row["outcome"] for row in audit_rows], ["error", "success"])
+            self.assertTrue(all(len(row["query_hash"]) == 64 for row in audit_rows))
+            serialized_audit = str([dict(row) for row in audit_rows])
+            self.assertNotIn("hidden evidence", serialized_audit)
+            self.assertNotIn(hidden_repository, serialized_audit)
 
             bob_rows = visible_rows(bob_id, domain_id)
             self.assertEqual(bob_rows[0], [hidden_repository])
@@ -416,6 +524,10 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             with self.engine.begin() as connection:
                 connection.execute(
                     text("DELETE FROM retrieval_trace WHERE id=:id"), {"id": alice_trace}
+                )
+                connection.execute(
+                    text("DELETE FROM mcp_audit_event WHERE principal_id=:id"),
+                    {"id": alice_id},
                 )
                 connection.execute(
                     text("DELETE FROM solution WHERE id=:id"), {"id": solution_id}

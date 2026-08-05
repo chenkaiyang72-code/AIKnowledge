@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-PostgreSQL schema v4 增加五张安全表：
+PostgreSQL schema v4 增加五张身份/授权表，schema v5 再增加 token 撤销时间、认证目录角色和 MCP 审计表：
 
 | 表 | 作用 |
 | --- | --- |
@@ -11,6 +11,7 @@ PostgreSQL schema v4 增加五张安全表：
 | `security_team` | domain 内的协作团队 |
 | `security_team_member` | principal 与 team 的成员关系 |
 | `repository_grant` | repository 对 principal 或 team 的带时效授权 |
+| `mcp_audit_event` | principal 隔离的 metadata-only tool 调用审计 |
 
 `repository_grant` 的 principal/team 必须二选一；撤销或过期 grant、暂停 principal/team/domain 均不会通过可见性函数。授权变化只影响后续查询事务，不复制源码、不重建 snapshot。
 
@@ -51,4 +52,4 @@ SELECT set_config('aikb.security_domain_id', :security_domain_id, true);
 
 集成测试使用真正的非 owner `aikb_reader`，建立 Alice/team 与 Bob/direct grant：Alice 只能看到 visible repository/chunk/solution member，Bob 只能看到 hidden 一侧，错误 domain 得到零行；同一测试还验证 secured `PostgresCatalog`、solution partial visibility 和只允许 principal 写自己的 retrieval trace。
 
-远程 HTTP 仍未开放。下一步是固定 OIDC verifier、JWT audience/scope/expiry/not-before/revocation、MCP 401/Protected Resource Metadata，然后把认证后的 principal 接到本 RLS 事务。
+OIDC verifier、JWT audience/scope/expiry/not-before/revocation、MCP 401/Protected Resource Metadata 与 metadata-only audit 已完成本地工程实现，等待共享 PostgreSQL CI 终验。部署方式见[远程 MCP 文档](remote-mcp-auth.md)。

@@ -8,7 +8,7 @@
 
 ## 当前阶段
 
-项目已完成 Phase 0C 跨仓 PoC 与 Phase 1A 只读 MCP 的工程验收，Claude Code 真实 stdio 客户端已连接成功；当前正在实现 Phase 1B principal、团队授权和 PostgreSQL RLS，远程 HTTP 仍保持关闭。真实问题集已保留，按当前决定暂缓人工复核：
+项目已完成 Phase 0C 跨仓 PoC、Phase 1A 只读 MCP，以及 Phase 1B 的 principal、团队授权和 PostgreSQL RLS 工程验收；当前正在终验远程 MCP 的 OIDC/JWKS、精确 audience、token 撤销与 metadata-only audit。真实问题集已保留，按当前决定暂缓人工复核：
 
 - [项目总体设计](docs/architecture.md)
 - [技术蓝图：架构、技术与开源组件映射](docs/technical-blueprint.md)
@@ -29,6 +29,8 @@
 - [ADR-0003：采用 MCP v2 只读接入](docs/decisions/0003-mcp-v2-read-only.md)
 - [团队身份、仓库授权与 PostgreSQL RLS](docs/team-security.md)
 - [ADR-0004：principal、团队授权与 RLS](docs/decisions/0004-principal-acl-rls.md)
+- [远程 MCP：OIDC、RLS 与审计](docs/remote-mcp-auth.md)
+- [ADR-0005：远程 MCP 作为 OIDC Resource Server](docs/decisions/0005-oidc-resource-server.md)
 
 首版技术路线：Python 模块化单体与独立 worker，使用 PostgreSQL/pgvector 保存元数据和向量，使用 Tree-sitter、源码标识符/关系提取器和 Zoekt 建立无需编译的代码索引，并通过只读 MCP 网关向不同 AI 客户端提供带版本和引用的 Context Pack。
 
@@ -91,7 +93,9 @@ python -m aikb mcp-serve `
   --port 8000
 ```
 
-未认证 HTTP 被强制限制在 loopback；远程团队服务必须等 OIDC/OAuth、token audience、repository ACL 与 PostgreSQL RLS 完成后开放。Cursor 与 Claude Code 的完整配置见[MCP 运行文档](docs/mcp-read-server.md)。
+未认证 HTTP 始终被强制限制在 loopback；只有同时配置 OIDC/JWKS、精确 token audience、repository ACL 和 PostgreSQL 非 owner RLS 角色时，服务才允许监听非 loopback 地址。Cursor 与 Claude Code 的完整配置见[MCP 运行文档](docs/mcp-read-server.md)。
+
+远程安全链路已进入 Phase 1B 工程验收：JWT/OIDC、RFC 9728 discovery、principal directory、PostgreSQL RLS 和 metadata-only audit 的配置见[远程 MCP 文档](docs/remote-mcp-auth.md)。在共享 CI 与部署约束全部通过前，默认命令仍不会开放未认证远程地址。
 
 PostgreSQL schema 和 migration 可选安装：
 
