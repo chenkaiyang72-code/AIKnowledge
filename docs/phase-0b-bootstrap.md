@@ -126,6 +126,6 @@ schema v4 增加 `analysis_artifact`：以 `blob SHA-256 + language + analysis_p
 - 已实现第一版 source-only occurrence、预处理条件、include、Kconfig/Kbuild、调用候选、有界依赖扩展和按 blob 复用的分析缓存；复杂变量展开与声明/定义安全归并仍需扩展。
 - 项目明确不生成 build profile、不依赖 `.config` 或 `compile_commands.json`，也不执行 Linux 构建。
 - 已有 PostgreSQL/pgvector schema、原子 publisher、Zoekt lexical adapter 和 lexical/symbol/relation RRF；vector 通道仍待效果评测。
-- 已有 Context Pack v1.2；还没有 MCP、权限与多人共享服务。
+- 已有 Context Pack v1.3 和跨仓 partial-visibility PoC；还没有 MCP、正式身份权限与多人共享服务。
 
 因此目前是“第一版可运行的本地知识目录与检索骨架”，不是已经完成的团队知识库。

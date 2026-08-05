@@ -15,6 +15,10 @@ KNOWLEDGE_COMMANDS = {
     "kb-symbol",
     "kb-context",
     "kb-context-schema",
+    "kb-solution-publish",
+    "kb-solution-publish-postgres",
+    "kb-solution-show",
+    "kb-solution-context",
     "kb-publish-postgres",
     "kb-zoekt-export",
 }
@@ -38,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
             "  kb-symbol     show source-only occurrences and relation candidates\n\n"
             "  kb-context    build a budgeted Context Pack with retrieval trace\n"
             "  kb-context-schema  print Context Pack v1 JSON Schema\n\n"
+            "  kb-solution-publish  activate a pinned multi-repository version set\n"
+            "  kb-solution-publish-postgres  publish that version set to the team store\n"
+            "  kb-solution-show     resolve visible members of a solution snapshot\n"
+            "  kb-solution-context  build a cross-repository Context Pack\n\n"
             "  kb-publish-postgres  atomically publish a snapshot to PostgreSQL\n\n"
             "  kb-zoekt-export  materialize an immutable snapshot for Zoekt\n\n"
             "Run 'python -m aikb <command> --help' for command options."

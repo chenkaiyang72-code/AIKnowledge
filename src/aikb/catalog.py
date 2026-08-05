@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from aikb.storage import LexicalSearchResult, SourceLocation
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 SCHEMA_SQL = """
@@ -73,6 +73,52 @@ CREATE TABLE IF NOT EXISTS snapshot_event (
     state TEXT NOT NULL,
     recorded_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS solution (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS solution_snapshot (
+    id TEXT PRIMARY KEY,
+    solution_id TEXT NOT NULL REFERENCES solution(id),
+    revision TEXT NOT NULL,
+    manifest_digest TEXT NOT NULL,
+    manifest_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('building', 'validated', 'active', 'superseded')),
+    member_count INTEGER NOT NULL DEFAULT 0 CHECK (member_count >= 0),
+    created_at TEXT NOT NULL,
+    activated_at TEXT,
+    UNIQUE (solution_id, revision, manifest_digest)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_solution_snapshot_per_solution
+ON solution_snapshot(solution_id) WHERE state = 'active';
+
+CREATE TABLE IF NOT EXISTS solution_snapshot_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    solution_snapshot_id TEXT NOT NULL REFERENCES solution_snapshot(id),
+    state TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS solution_snapshot_member (
+    solution_snapshot_id TEXT NOT NULL REFERENCES solution_snapshot(id),
+    repository_id TEXT NOT NULL REFERENCES repository(id),
+    snapshot_id TEXT NOT NULL REFERENCES snapshot(id),
+    role TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    required INTEGER NOT NULL DEFAULT 1 CHECK (required IN (0, 1)),
+    PRIMARY KEY (solution_snapshot_id, repository_id),
+    UNIQUE (solution_snapshot_id, snapshot_id),
+    UNIQUE (solution_snapshot_id, role),
+    UNIQUE (solution_snapshot_id, ordinal)
+);
+
+CREATE INDEX IF NOT EXISTS solution_snapshot_member_snapshot
+ON solution_snapshot_member(snapshot_id);
 
 CREATE TABLE IF NOT EXISTS blob (
     id TEXT PRIMARY KEY,
@@ -327,6 +373,9 @@ class Catalog:
             if current_version == 4:
                 self._migrate_v4_to_v5()
                 current_version = 5
+            if current_version == 5:
+                self._migrate_v5_to_v6()
+                current_version = 6
             if current_version != SCHEMA_VERSION:
                 raise RuntimeError(
                     f"unsupported catalog schema {current_version}; expected {SCHEMA_VERSION}"
@@ -455,6 +504,33 @@ class Catalog:
                 self.connection.execute(statement)
         self.connection.execute(
             "UPDATE schema_metadata SET value = ? WHERE key = 'schema_version'",
+            ("5",),
+        )
+        self.connection.commit()
+
+    def _migrate_v5_to_v6(self) -> None:
+        # initialize() executes the idempotent schema DDL first, so migration
+        # only advances the catalog contract after the solution tables exist.
+        required_tables = {
+            "solution",
+            "solution_snapshot",
+            "solution_snapshot_event",
+            "solution_snapshot_member",
+        }
+        existing_tables = {
+            row["name"]
+            for row in self.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        missing = required_tables - existing_tables
+        if missing:
+            raise RuntimeError(
+                "solution schema migration did not create: "
+                + ", ".join(sorted(missing))
+            )
+        self.connection.execute(
+            "UPDATE schema_metadata SET value = ? WHERE key = 'schema_version'",
             (str(SCHEMA_VERSION),),
         )
         self.connection.commit()
@@ -465,6 +541,12 @@ class Catalog:
         ).fetchone()["count"]
         snapshots = self.connection.execute(
             "SELECT COUNT(*) AS count FROM snapshot"
+        ).fetchone()["count"]
+        solutions = self.connection.execute(
+            "SELECT COUNT(*) AS count FROM solution"
+        ).fetchone()["count"]
+        solution_snapshots = self.connection.execute(
+            "SELECT COUNT(*) AS count FROM solution_snapshot"
         ).fetchone()["count"]
         active_rows = self.connection.execute(
             """
@@ -485,12 +567,28 @@ class Catalog:
             ORDER BY r.name
             """
         ).fetchall()
+        active_solution_rows = self.connection.execute(
+            """
+            SELECT ss.id AS solution_snapshot_id, sol.name AS solution,
+                   ss.revision, ss.manifest_digest, ss.state,
+                   ss.member_count, ss.created_at, ss.activated_at
+            FROM solution_snapshot AS ss
+            JOIN solution AS sol ON sol.id = ss.solution_id
+            WHERE ss.state = 'active'
+            ORDER BY sol.name
+            """
+        ).fetchall()
         return {
             "schema_version": SCHEMA_VERSION,
             "database": str(self.path.resolve()),
             "repository_count": repositories,
             "snapshot_count": snapshots,
             "active_snapshots": [dict(row) for row in active_rows],
+            "solution_count": solutions,
+            "solution_snapshot_count": solution_snapshots,
+            "active_solution_snapshots": [
+                dict(row) for row in active_solution_rows
+            ],
         }
 
     def find_symbol(

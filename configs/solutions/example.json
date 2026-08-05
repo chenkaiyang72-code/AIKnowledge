@@ -1,0 +1,21 @@
+{
+  "schema_uri": "urn:aiknowledge:schema:solution-manifest:v1",
+  "schema_version": 1,
+  "name": "linux-platform-example",
+  "revision": "2026.08-r1",
+  "description": "Replace snapshot IDs with validated IDs returned by kb-ingest.",
+  "members": [
+    {
+      "repository": "linux-kernel",
+      "snapshot_id": "snap_replace_with_exact_kernel_snapshot",
+      "role": "kernel",
+      "required": true
+    },
+    {
+      "repository": "platform-driver",
+      "snapshot_id": "snap_replace_with_exact_driver_snapshot",
+      "role": "driver",
+      "required": true
+    }
+  ]
+}

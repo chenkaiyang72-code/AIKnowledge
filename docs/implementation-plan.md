@@ -147,6 +147,18 @@
 | AUTH-001 | 实现 PoC 级仓库可见性过滤和 partial visibility | ACL test double |
 | EVAL-008 | 新增至少 10 个跨仓问题 | cross-repo golden set |
 
+### 当前实现状态（2026-08-06）
+
+| ID | 状态 | 已实现内容 | 仍需推进 |
+| --- | --- | --- | --- |
+| SOL-001 | 完成 | SQLite schema v6、PostgreSQL schema v3、不可变 manifest、成员和状态事件 | 后续只做兼容迁移，不改历史 revision |
+| SOL-002 | 完成 | JSON manifest v1 和双仓示例；精确绑定 repository snapshot | 接入实际项目 release/BOM 自动生成 |
+| SOL-003 | PoC 完成 | 查询命中的源码调用候选可与另一成员仓定义生成带双端 citation 的 `source_inferred` link | 扩展 IDL/API schema/外部 symbol map 离线边 |
+| SOL-004 | PoC 完成 | ACL/manifest 先解析可见固定仓库，再分仓 hybrid retrieval；2～4 仓使用 all-visible 高召回基线 | 仓库数扩大后评测选择性 router，不能降低 Recall |
+| SOL-005 | 完成 | repository-rank RRF、Context Pack v1.3、solution scope 和跨仓 trace | 大规模延迟与分页压测 |
+| AUTH-001 | PoC 完成 | 显式 allow-set test double、partial visibility、隐藏仓库序列化零泄露测试 | Phase 1B 接 OIDC/ACL/RLS，禁止信任客户端 allow-set |
+| EVAL-008 | 工程 fixture 完成 | 10 个双仓自动问题 routing recall `1.0`、版本组合准确率 `1.0` | 用户决定恢复后，用真实团队问题替换/补充人工黄金证据 |
+
 ### 验收
 
 - 不允许把未列入 solution snapshot 的最新分支混入结果。

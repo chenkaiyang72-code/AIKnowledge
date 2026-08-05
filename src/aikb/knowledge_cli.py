@@ -7,7 +7,11 @@ import sys
 from pathlib import Path
 
 from aikb.catalog import Catalog
-from aikb.context_pack import build_context_pack, context_pack_json_schema
+from aikb.context_pack import (
+    build_context_pack,
+    build_solution_context_pack,
+    context_pack_json_schema,
+)
 from aikb.ingestion import (
     DEFAULT_CHUNK_LINES,
     DEFAULT_CHUNK_OVERLAP,
@@ -16,6 +20,11 @@ from aikb.ingestion import (
     load_scope,
 )
 from aikb.retrieval import retrieve_hybrid
+from aikb.solution import (
+    load_solution_manifest,
+    publish_solution_snapshot,
+    resolve_solution_scope,
+)
 
 
 DEFAULT_DATABASE = Path(".aikb/catalog.db")
@@ -126,6 +135,62 @@ def build_parser() -> argparse.ArgumentParser:
     context_parser.add_argument("--max-relations-per-symbol", type=int, default=8)
     _add_zoekt_options(context_parser)
 
+    solution_publish_parser = subparsers.add_parser(
+        "kb-solution-publish",
+        help="validate and activate an immutable multi-repository solution manifest",
+    )
+    solution_publish_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE)
+    solution_publish_parser.add_argument("--manifest", type=Path, required=True)
+
+    solution_postgres_parser = subparsers.add_parser(
+        "kb-solution-publish-postgres",
+        help="publish a solution manifest after its snapshots reach PostgreSQL",
+    )
+    solution_postgres_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE)
+    solution_postgres_parser.add_argument("--manifest", type=Path, required=True)
+    solution_postgres_parser.add_argument(
+        "--postgres-url",
+        help="SQLAlchemy URL; prefer the AIKB_POSTGRES_URL environment variable",
+    )
+
+    solution_show_parser = subparsers.add_parser(
+        "kb-solution-show",
+        help="resolve the active or explicitly pinned solution snapshot",
+    )
+    solution_show_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE)
+    solution_show_parser.add_argument("--solution", required=True)
+    solution_show_parser.add_argument("--solution-snapshot-id")
+    solution_show_parser.add_argument(
+        "--allow-repository",
+        action="append",
+        dest="allowed_repositories",
+        help="limit output to an authorized repository; repeat as needed",
+    )
+
+    solution_context_parser = subparsers.add_parser(
+        "kb-solution-context",
+        help="build a Context Pack over a pinned multi-repository solution",
+    )
+    solution_context_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE)
+    solution_context_parser.add_argument("--solution", required=True)
+    solution_context_parser.add_argument("--solution-snapshot-id")
+    solution_context_parser.add_argument("--query", required=True)
+    solution_context_parser.add_argument(
+        "--allow-repository",
+        action="append",
+        dest="allowed_repositories",
+        help="authorize a repository for this request; repeat as needed",
+    )
+    solution_context_parser.add_argument("--max-evidence-items", type=int, default=8)
+    solution_context_parser.add_argument(
+        "--evidence-token-budget", type=int, default=3_000
+    )
+    solution_context_parser.add_argument("--max-symbols", type=int, default=5)
+    solution_context_parser.add_argument(
+        "--max-relations-per-symbol", type=int, default=8
+    )
+    _add_zoekt_options(solution_context_parser)
+
     export_parser = subparsers.add_parser(
         "kb-zoekt-export",
         help="materialize an immutable validated snapshot for Zoekt indexing",
@@ -166,7 +231,8 @@ def main(argv: list[str] | None = None) -> int:
                 "AIKB_ZOEKT_URL"
             )
             if (
-                args.command in {"kb-search", "kb-retrieve", "kb-context"}
+                args.command
+                in {"kb-search", "kb-retrieve", "kb-context", "kb-solution-context"}
                 and zoekt_url
             ):
                 from aikb.zoekt import ZoektClient, ZoektReadCatalog
@@ -244,6 +310,66 @@ def main(argv: list[str] | None = None) -> int:
                     repository=args.repository,
                     snapshot_id=args.snapshot_id,
                 )
+            elif args.command == "kb-solution-publish":
+                report = publish_solution_snapshot(
+                    catalog,
+                    load_solution_manifest(args.manifest),
+                ).as_dict()
+            elif args.command == "kb-solution-publish-postgres":
+                postgres_url = args.postgres_url or os.environ.get(
+                    "AIKB_POSTGRES_URL"
+                )
+                if not postgres_url:
+                    raise ValueError("set AIKB_POSTGRES_URL or pass --postgres-url")
+                try:
+                    from sqlalchemy import create_engine
+
+                    from aikb.postgres_solution import PostgresSolutionPublisher
+                except ImportError as error:
+                    raise RuntimeError(
+                        "PostgreSQL support is not installed; run "
+                        "python -m pip install -e \".[postgres]\""
+                    ) from error
+                engine = create_engine(postgres_url)
+                try:
+                    report = PostgresSolutionPublisher(engine).publish(
+                        load_solution_manifest(args.manifest)
+                    ).as_dict()
+                finally:
+                    engine.dispose()
+            elif args.command == "kb-solution-show":
+                allowed = (
+                    set(args.allowed_repositories)
+                    if args.allowed_repositories is not None
+                    else None
+                )
+                report = resolve_solution_scope(
+                    catalog,
+                    solution=args.solution,
+                    solution_snapshot_id=args.solution_snapshot_id,
+                    allowed_repositories=allowed,
+                ).as_dict()
+            elif args.command == "kb-solution-context":
+                allowed = (
+                    set(args.allowed_repositories)
+                    if args.allowed_repositories is not None
+                    else None
+                )
+                scope = resolve_solution_scope(
+                    catalog,
+                    solution=args.solution,
+                    solution_snapshot_id=args.solution_snapshot_id,
+                    allowed_repositories=allowed,
+                )
+                report = build_solution_context_pack(
+                    catalog=read_catalog,
+                    query=args.query,
+                    scope=scope,
+                    max_evidence_items=args.max_evidence_items,
+                    evidence_token_budget=args.evidence_token_budget,
+                    max_symbols=args.max_symbols,
+                    max_relations_per_symbol=args.max_relations_per_symbol,
+                ).model_dump(mode="json")
             elif args.command == "kb-zoekt-export":
                 from aikb.zoekt import export_snapshot_for_zoekt
 

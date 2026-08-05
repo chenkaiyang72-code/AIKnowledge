@@ -10,12 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aikb.catalog import SearchHit
 from aikb.retrieval import ChannelContribution, retrieve_hybrid
+from aikb.solution import ResolvedSolutionScope, retrieve_solution_hybrid
 from aikb.storage import ReadCatalog
 
 
 CONTEXT_PACK_SCHEMA = "urn:aiknowledge:schema:context-pack:v1"
-CONTEXT_PACK_VERSION = "1.2"
-CONTEXT_BUILDER_VERSION = "context-pack-v1.2+hybrid-rrf-v1"
+CONTEXT_PACK_VERSION = "1.3"
+CONTEXT_BUILDER_VERSION = "context-pack-v1.3+solution-rrf-v1"
 CHARS_PER_ESTIMATED_TOKEN = 4
 MIN_EVIDENCE_CHARS = 64
 
@@ -32,12 +33,19 @@ class SnapshotReference(StrictModel):
     manifest_digest: str
     index_profile_digest: str
     state: Literal["building", "validated", "active", "superseded"]
+    role: str | None = None
+    ordinal: int | None = None
+    required: bool | None = None
 
 
 class ContextScope(StrictModel):
-    kind: Literal["repository_set"] = "repository_set"
+    kind: Literal["repository_set", "solution_snapshot"] = "repository_set"
     requested_repository: str | None = None
     requested_snapshot_id: str | None = None
+    requested_solution: str | None = None
+    requested_solution_snapshot_id: str | None = None
+    solution_revision: str | None = None
+    solution_manifest_digest: str | None = None
     snapshots: list[SnapshotReference]
     partial_visibility: bool = False
 
@@ -56,7 +64,7 @@ class RetrievalChannelContribution(StrictModel):
 
 
 class RetrievalScore(StrictModel):
-    channel: Literal["hybrid_rrf"] = "hybrid_rrf"
+    channel: Literal["hybrid_rrf", "solution_rrf"] = "hybrid_rrf"
     rank: float
     rrf_k: int
     contributions: list[RetrievalChannelContribution]
@@ -103,10 +111,26 @@ class RelationContext(StrictModel):
 
 
 class SymbolContext(StrictModel):
+    repository: str
+    snapshot_id: str
     name: str
     occurrences: list[SymbolOccurrenceContext]
     relations: list[RelationContext]
     truncated: bool = False
+
+
+class CrossRepositoryLink(StrictModel):
+    id: str
+    kind: Literal["cross_repository_symbol_match"] = "cross_repository_symbol_match"
+    symbol: str
+    source_repository: str
+    source_snapshot_id: str
+    source_symbol: str | None = None
+    source_citation: str
+    target_repository: str
+    target_snapshot_id: str
+    target_citation: str
+    confidence: Literal["source_inferred"] = "source_inferred"
 
 
 class Coverage(StrictModel):
@@ -130,7 +154,7 @@ class ContextBudget(StrictModel):
 
 class TraceCandidate(StrictModel):
     chunk_id: str
-    channel: Literal["hybrid_rrf"] = "hybrid_rrf"
+    channel: Literal["hybrid_rrf", "solution_rrf"] = "hybrid_rrf"
     fused_score: float
     contributions: list[RetrievalChannelContribution]
     selected: bool
@@ -145,6 +169,7 @@ class RetrievalTrace(StrictModel):
     selected_count: int
     channel_candidate_counts: dict[str, int]
     rrf_k: int
+    routing: Literal["catalog_scope", "all_visible_solution_members"]
     candidates: list[TraceCandidate]
 
 
@@ -156,12 +181,13 @@ class ContextPack(StrictModel):
     )
 
     schema_uri: Literal["urn:aiknowledge:schema:context-pack:v1"]
-    schema_version: Literal["1.2"]
+    schema_version: Literal["1.3"]
     id: str
     query: str
     scope: ContextScope
     evidence: list[CodeEvidence]
     symbols: list[SymbolContext]
+    cross_repository_links: list[CrossRepositoryLink]
     team_knowledge: list[dict[str, Any]] = Field(default_factory=list)
     coverage: Coverage
     gaps: list[str]
@@ -205,8 +231,7 @@ def _build_symbol_contexts(
     catalog: ReadCatalog,
     query: str,
     hits: list[SearchHit],
-    repository: str | None,
-    snapshot_id: str | None,
+    snapshot_rows: list[dict[str, Any]],
     max_symbols: int,
     max_relations_per_symbol: int,
 ) -> list[SymbolContext]:
@@ -215,51 +240,54 @@ def _build_symbol_contexts(
     symbols: list[SymbolContext] = []
     lookup_limit = max(8, max_relations_per_symbol * 2)
     for name in _identifier_candidates(query, hits):
-        report = catalog.find_symbol(
-            name=name,
-            top_k=min(200, lookup_limit),
-            repository=repository,
-            snapshot_id=snapshot_id,
-        )
-        if not report["occurrences"] and not report["relations"]:
-            continue
-        occurrence_rows = report["occurrences"][:4]
-        relation_rows = report["relations"][:max_relations_per_symbol]
-        symbols.append(
-            SymbolContext(
+        for snapshot in snapshot_rows:
+            report = catalog.find_symbol(
                 name=name,
-                occurrences=[
-                    SymbolOccurrenceContext(
-                        role=row["role"],
-                        kind=row["kind"],
-                        signature=row["signature"],
-                        confidence=row["confidence"],
-                        citation=row["citation"],
-                        source_condition=row["source_condition"],
-                    )
-                    for row in occurrence_rows
-                ],
-                relations=[
-                    RelationContext(
-                        kind=row["kind"],
-                        source_symbol=row["source_symbol"],
-                        target_text=row["target_text"],
-                        target_symbol=row["target_symbol"],
-                        target_path=row["target_path"],
-                        confidence=row["confidence"],
-                        citation=row["citation"],
-                        source_condition=row["source_condition"],
-                    )
-                    for row in relation_rows
-                ],
-                truncated=(
-                    len(report["occurrences"]) > len(occurrence_rows)
-                    or len(report["relations"]) > len(relation_rows)
-                ),
+                top_k=min(200, lookup_limit),
+                repository=snapshot["repository"],
+                snapshot_id=snapshot["snapshot_id"],
             )
-        )
-        if len(symbols) >= max_symbols:
-            break
+            if not report["occurrences"] and not report["relations"]:
+                continue
+            occurrence_rows = report["occurrences"][:4]
+            relation_rows = report["relations"][:max_relations_per_symbol]
+            symbols.append(
+                SymbolContext(
+                    repository=snapshot["repository"],
+                    snapshot_id=snapshot["snapshot_id"],
+                    name=name,
+                    occurrences=[
+                        SymbolOccurrenceContext(
+                            role=row["role"],
+                            kind=row["kind"],
+                            signature=row["signature"],
+                            confidence=row["confidence"],
+                            citation=row["citation"],
+                            source_condition=row["source_condition"],
+                        )
+                        for row in occurrence_rows
+                    ],
+                    relations=[
+                        RelationContext(
+                            kind=row["kind"],
+                            source_symbol=row["source_symbol"],
+                            target_text=row["target_text"],
+                            target_symbol=row["target_symbol"],
+                            target_path=row["target_path"],
+                            confidence=row["confidence"],
+                            citation=row["citation"],
+                            source_condition=row["source_condition"],
+                        )
+                        for row in relation_rows
+                    ],
+                    truncated=(
+                        len(report["occurrences"]) > len(occurrence_rows)
+                        or len(report["relations"]) > len(relation_rows)
+                    ),
+                )
+            )
+            if len(symbols) >= max_symbols:
+                return symbols
     return symbols
 
 
@@ -277,6 +305,58 @@ def _contribution_models(
     ]
 
 
+def _build_cross_repository_links(
+    symbols: list[SymbolContext],
+) -> list[CrossRepositoryLink]:
+    links: list[CrossRepositoryLink] = []
+    seen: set[tuple[str, str, str]] = set()
+    for source in symbols:
+        for relation in source.relations:
+            for target in symbols:
+                if source.repository == target.repository:
+                    continue
+                if relation.target_text != target.name:
+                    continue
+                for occurrence in target.occurrences:
+                    if occurrence.role != "definition":
+                        continue
+                    key = (source.snapshot_id, relation.citation, occurrence.citation)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    payload = {
+                        "symbol": target.name,
+                        "source_snapshot_id": source.snapshot_id,
+                        "source_citation": relation.citation,
+                        "target_snapshot_id": target.snapshot_id,
+                        "target_citation": occurrence.citation,
+                    }
+                    links.append(
+                        CrossRepositoryLink(
+                            id=_stable_id("cross_link", payload),
+                            symbol=target.name,
+                            source_repository=source.repository,
+                            source_snapshot_id=source.snapshot_id,
+                            source_symbol=relation.source_symbol,
+                            source_citation=relation.citation,
+                            target_repository=target.repository,
+                            target_snapshot_id=target.snapshot_id,
+                            target_citation=occurrence.citation,
+                        )
+                    )
+                    break
+    links.sort(
+        key=lambda item: (
+            item.symbol,
+            item.source_repository,
+            item.source_citation,
+            item.target_repository,
+            item.target_citation,
+        )
+    )
+    return links[:50]
+
+
 def build_context_pack(
     catalog: ReadCatalog,
     query: str,
@@ -286,6 +366,7 @@ def build_context_pack(
     evidence_token_budget: int = 3_000,
     max_symbols: int = 5,
     max_relations_per_symbol: int = 8,
+    solution_scope: ResolvedSolutionScope | None = None,
 ) -> ContextPack:
     normalized_query = _normalize_query(query)
     if not 1 <= max_evidence_items <= 50:
@@ -297,18 +378,37 @@ def build_context_pack(
     if not 0 <= max_relations_per_symbol <= 50:
         raise ValueError("max-relations-per-symbol must be between 0 and 50")
 
-    snapshot_rows = catalog.resolve_snapshots(
-        repository=repository,
-        snapshot_id=snapshot_id,
-    )
+    if solution_scope is not None and (repository is not None or snapshot_id is not None):
+        raise ValueError("repository scope and solution scope are mutually exclusive")
+    if solution_scope is None:
+        snapshot_rows = catalog.resolve_snapshots(
+            repository=repository,
+            snapshot_id=snapshot_id,
+        )
+        partial_visibility = False
+        routing = "catalog_scope"
+        score_channel = "hybrid_rrf"
+    else:
+        snapshot_rows = [dict(row) for row in solution_scope.snapshots]
+        partial_visibility = solution_scope.partial_visibility
+        routing = "all_visible_solution_members"
+        score_channel = "solution_rrf"
     candidate_limit = min(100, max(max_evidence_items * 3, max_evidence_items))
-    retrieval_result = retrieve_hybrid(
-        catalog=catalog,
-        query=normalized_query,
-        top_k=candidate_limit,
-        repository=repository,
-        snapshot_id=snapshot_id,
-    )
+    if solution_scope is None:
+        retrieval_result = retrieve_hybrid(
+            catalog=catalog,
+            query=normalized_query,
+            top_k=candidate_limit,
+            repository=repository,
+            snapshot_id=snapshot_id,
+        )
+    else:
+        retrieval_result = retrieve_solution_hybrid(
+            catalog=catalog,
+            query=normalized_query,
+            scope=solution_scope,
+            top_k=candidate_limit,
+        )
     hybrid_hits = list(retrieval_result.hits)
     hits = [item.hit for item in hybrid_hits]
     evidence_char_budget = evidence_token_budget * CHARS_PER_ESTIMATED_TOKEN
@@ -323,6 +423,7 @@ def build_context_pack(
             trace_candidates.append(
                 TraceCandidate(
                     chunk_id=hit.chunk_id,
+                    channel=score_channel,
                     fused_score=hybrid_hit.fused_score,
                     contributions=contribution_models,
                     selected=False,
@@ -335,6 +436,7 @@ def build_context_pack(
             trace_candidates.append(
                 TraceCandidate(
                     chunk_id=hit.chunk_id,
+                    channel=score_channel,
                     fused_score=hybrid_hit.fused_score,
                     contributions=contribution_models,
                     selected=False,
@@ -374,6 +476,7 @@ def build_context_pack(
                     f"{hit.path}:{hit.start_line}-{hit.end_line}"
                 ),
                 retrieval=RetrievalScore(
+                    channel=score_channel,
                     rank=hybrid_hit.fused_score,
                     rrf_k=retrieval_result.rrf_k,
                     contributions=contribution_models,
@@ -385,6 +488,7 @@ def build_context_pack(
         trace_candidates.append(
             TraceCandidate(
                 chunk_id=hit.chunk_id,
+                channel=score_channel,
                 fused_score=hybrid_hit.fused_score,
                 contributions=contribution_models,
                 selected=True,
@@ -396,11 +500,11 @@ def build_context_pack(
         catalog=catalog,
         query=normalized_query,
         hits=hits,
-        repository=repository,
-        snapshot_id=snapshot_id,
+        snapshot_rows=snapshot_rows,
         max_symbols=max_symbols,
         max_relations_per_symbol=max_relations_per_symbol,
     )
+    cross_repository_links = _build_cross_repository_links(symbols)
     omitted_candidate_count = sum(
         not candidate.selected for candidate in trace_candidates
     )
@@ -423,8 +527,13 @@ def build_context_pack(
     trace_payload = {
         "builder_version": CONTEXT_BUILDER_VERSION,
         "query": normalized_query,
+        "scope_kind": "solution_snapshot" if solution_scope else "repository_set",
         "repository": repository,
         "snapshot_id": snapshot_id,
+        "solution_snapshot_id": (
+            solution_scope.solution_snapshot_id if solution_scope else None
+        ),
+        "partial_visibility": partial_visibility,
         "resolved_snapshots": [row["snapshot_id"] for row in snapshot_rows],
         "candidates": [
             {
@@ -440,6 +549,9 @@ def build_context_pack(
             for candidate in trace_candidates
         ],
         "symbols": [symbol.name for symbol in symbols],
+        "cross_repository_links": [
+            link.id for link in cross_repository_links
+        ],
         "channel_candidate_counts": retrieval_result.channel_candidate_counts,
         "rrf_k": retrieval_result.rrf_k,
         "budget": budget.model_dump(mode="json"),
@@ -453,13 +565,14 @@ def build_context_pack(
         selected_count=len(evidence),
         channel_candidate_counts=retrieval_result.channel_candidate_counts,
         rrf_k=retrieval_result.rrf_k,
+        routing=routing,
         candidates=trace_candidates,
     )
 
     if evidence:
         coverage = Coverage(
             evidence_status="available_unassessed",
-            partial_visibility=False,
+            partial_visibility=partial_visibility,
             reason=(
                 "indexed evidence is available, but answer completeness has not "
                 "been assessed"
@@ -471,25 +584,47 @@ def build_context_pack(
     else:
         coverage = Coverage(
             evidence_status="none",
-            partial_visibility=False,
+            partial_visibility=partial_visibility,
             reason="no indexed evidence matched the query in the requested scope",
         )
         gaps = ["no indexed evidence matched the query in the requested scope"]
     if omitted_candidate_count:
         gaps.append("additional retrieval candidates were omitted by context budget")
+    if partial_visibility:
+        gaps.append("the requested solution is only partially visible to this principal")
 
     warnings: list[str] = []
+    if partial_visibility:
+        warnings.append("retrieval was restricted to visible solution members")
     if any(row["state"] != "active" for row in snapshot_rows):
-        warnings.append("an explicitly selected snapshot is not currently active")
-    scope = ContextScope(
-        requested_repository=repository,
-        requested_snapshot_id=snapshot_id,
-        snapshots=[SnapshotReference(**row) for row in snapshot_rows],
-    )
+        warnings.append("the immutable scope includes a snapshot that is no longer active")
+    if solution_scope is None:
+        scope = ContextScope(
+            requested_repository=repository,
+            requested_snapshot_id=snapshot_id,
+            snapshots=[SnapshotReference(**row) for row in snapshot_rows],
+        )
+    else:
+        scope = ContextScope(
+            kind="solution_snapshot",
+            requested_solution=solution_scope.solution,
+            requested_solution_snapshot_id=(
+                None if partial_visibility else solution_scope.solution_snapshot_id
+            ),
+            solution_revision=solution_scope.revision,
+            solution_manifest_digest=(
+                None if partial_visibility else solution_scope.manifest_digest
+            ),
+            snapshots=[SnapshotReference(**row) for row in snapshot_rows],
+            partial_visibility=partial_visibility,
+        )
     pack_payload = {
         "trace_id": trace_id,
         "snapshot_ids": [row["snapshot_id"] for row in snapshot_rows],
         "evidence_ids": [item.id for item in evidence],
+        "cross_repository_link_ids": [
+            link.id for link in cross_repository_links
+        ],
     }
     return ContextPack(
         schema_uri=CONTEXT_PACK_SCHEMA,
@@ -499,11 +634,32 @@ def build_context_pack(
         scope=scope,
         evidence=evidence,
         symbols=symbols,
+        cross_repository_links=cross_repository_links,
         coverage=coverage,
         gaps=gaps,
         warnings=warnings,
         budget=budget,
         retrieval_trace=retrieval_trace,
+    )
+
+
+def build_solution_context_pack(
+    catalog: ReadCatalog,
+    query: str,
+    scope: ResolvedSolutionScope,
+    max_evidence_items: int = 8,
+    evidence_token_budget: int = 3_000,
+    max_symbols: int = 5,
+    max_relations_per_symbol: int = 8,
+) -> ContextPack:
+    return build_context_pack(
+        catalog=catalog,
+        query=query,
+        max_evidence_items=max_evidence_items,
+        evidence_token_budget=evidence_token_budget,
+        max_symbols=max_symbols,
+        max_relations_per_symbol=max_relations_per_symbol,
+        solution_scope=scope,
     )
 
 

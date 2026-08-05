@@ -156,7 +156,7 @@ class ZoektTests(unittest.TestCase):
         self.assertGreaterEqual(len(lexical_hits), 1)
         self.assertEqual(lexical_hits[0].hit.path, "kernel/demo.c")
         self.assertEqual(lexical_hits[0].hit.snapshot_id, snapshot["id"])
-        self.assertEqual(pack.schema_version, "1.2")
+        self.assertEqual(pack.schema_version, "1.3")
         self.assertIn("lexical_zoekt", pack.retrieval_trace.channel_candidate_counts)
         self.assertEqual(len(requests), 2)
         self.assertEqual(

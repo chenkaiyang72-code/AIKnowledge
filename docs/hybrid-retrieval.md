@@ -35,7 +35,7 @@ python -m aikb kb-retrieve `
   --top-k 10
 ```
 
-每条结果包含 `fused_score` 和 `contributions`，可以看到它在每个通道的 rank、weight 和 reciprocal score。Context Pack v1.2 使用同一结果并把这些信息写入 retrieval trace。
+每条结果包含 `fused_score` 和 `contributions`，可以看到它在每个通道的 rank、weight 和 reciprocal score。Context Pack v1.3 使用同一结果并把这些信息写入 retrieval trace；solution scope 会再按各仓内部 rank 做一层确定性 repository RRF。
 
 ## 真实源码结果
 

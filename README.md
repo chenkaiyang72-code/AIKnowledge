@@ -8,7 +8,7 @@
 
 ## 当前阶段
 
-项目已进入 Phase 0B 结构化检索阶段；问题集已保留，按当前决定暂缓人工复核：
+项目已完成 Phase 0C 跨仓 PoC 的本地工程验收，正在进入只读 MCP 阶段；真实问题集已保留，按当前决定暂缓人工复核：
 
 - [项目总体设计](docs/architecture.md)
 - [技术蓝图：架构、技术与开源组件映射](docs/technical-blueprint.md)
@@ -24,6 +24,7 @@
 - [结构化检索自动评测报告](evals/reports/linux-6.18.40-structured.md)
 - [Qwen3 语义候选重排消融](docs/semantic-ablation.md)
 - [ADR-0002：语义重排与全量向量决策](docs/decisions/0002-semantic-candidate-reranking.md)
+- [跨仓 solution snapshot、检索与部分可见性](docs/cross-repo-solution.md)
 
 首版技术路线：Python 模块化单体与独立 worker，使用 PostgreSQL/pgvector 保存元数据和向量，使用 Tree-sitter、源码标识符/关系提取器和 Zoekt 建立无需编译的代码索引，并通过只读 MCP 网关向不同 AI 客户端提供带版本和引用的 Context Pack。
 
@@ -53,7 +54,20 @@ python -m aikb kb-context `
   --evidence-token-budget 1200
 ```
 
-默认数据库位于 `.aikb/catalog.db`。`kb-symbol` 返回定义/声明、调用和 include 等直接扫描关系，并明确标注 `source_exact`、`source_inferred` 或 `ambiguous_candidate`。`kb-retrieve` 用确定性 RRF 融合 lexical、精确 symbol 和直接 relation 三个通道；`kb-context` 把融合结果输出为带不可变 snapshot、blob/chunk 哈希、稳定 citation、预算和 retrieval trace 的 Context Pack v1.2，没有证据时明确返回 gap。依赖扩展默认读取 scope 中的深度、文件数和每条引用候选数预算；只改变扫描预算不会使未变化源码的分析缓存失效。冷扫描先按有界批次持久化内容寻址分析缓存，完整 snapshot 仍只在计数校验后原子激活。SQLite 只用于本地 bootstrap；团队共享主库仍按设计使用 PostgreSQL/pgvector。
+默认数据库位于 `.aikb/catalog.db`。`kb-symbol` 返回定义/声明、调用和 include 等直接扫描关系，并明确标注 `source_exact`、`source_inferred` 或 `ambiguous_candidate`。`kb-retrieve` 用确定性 RRF 融合 lexical、精确 symbol 和直接 relation 三个通道；`kb-context` 把融合结果输出为带不可变 snapshot、blob/chunk 哈希、稳定 citation、预算和 retrieval trace 的 Context Pack v1.3，没有证据时明确返回 gap。依赖扩展默认读取 scope 中的深度、文件数和每条引用候选数预算；只改变扫描预算不会使未变化源码的分析缓存失效。冷扫描先按有界批次持久化内容寻址分析缓存，完整 snapshot 仍只在计数校验后原子激活。SQLite 只用于本地 bootstrap；团队共享主库仍按设计使用 PostgreSQL/pgvector。
+
+多个仓库使用不可变 solution manifest 固定版本组合。先把 [`configs/solutions/example.json`](configs/solutions/example.json) 中的占位 snapshot ID 替换为各仓 `kb-ingest` 的实际返回值：
+
+```powershell
+python -m aikb kb-solution-publish `
+  --manifest configs/solutions/my-solution.json
+
+python -m aikb kb-solution-context `
+  --solution my-solution `
+  --query "驱动初始化如何进入内核核心路径"
+```
+
+跨仓 Context Pack 对每个可见的固定 snapshot 分仓检索并公平合并，所有 evidence 保留 repository/revision/path/lines；能匹配的跨仓调用候选以 `source_inferred` link 返回。PoC 的 `--allow-repository` 用于验证部分可见性，生产权限仍将在 Phase 1B 由身份和 RLS 强制。
 
 PostgreSQL schema 和 migration 可选安装：
 
@@ -69,6 +83,10 @@ python -m aikb kb-publish-postgres --db .aikb/catalog.db
 python -m aikb kb-publish-postgres `
   --db .aikb/catalog.db `
   --snapshot-id snap_0b0e8c0e71ad7f720c31b8e2
+
+# manifest 中全部 repository snapshot 发布后，再原子发布 solution 版本组合
+python -m aikb kb-solution-publish-postgres `
+  --manifest configs/solutions/my-solution.json
 
 # 仅查看 migration SQL，不连接数据库
 python -m alembic upgrade head --sql

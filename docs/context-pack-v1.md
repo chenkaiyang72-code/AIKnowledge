@@ -4,7 +4,7 @@
 
 Context Pack 是 AIKnowledge 提供给 Cursor、Claude Code、MCP 和未来托管回答服务的稳定证据契约。它只组织检索证据，不生成答案，也不把某个模型或检索引擎写进客户端协议。
 
-当前 schema 标识为 `urn:aiknowledge:schema:context-pack:v1`，版本为 `1.2`。Pydantic 模型位于 `src/aikb/context_pack.py`，可通过以下命令输出 JSON Schema：
+当前 schema 标识为 `urn:aiknowledge:schema:context-pack:v1`，版本为 `1.3`。Pydantic 模型位于 `src/aikb/context_pack.py`，可通过以下命令输出 JSON Schema：
 
 ```powershell
 python -m aikb kb-context-schema
@@ -29,12 +29,13 @@ python -m aikb kb-context-schema
 | `scope` | 请求范围及实际使用的不可变 snapshot |
 | `evidence` | 带稳定引用的代码 chunk |
 | `symbols` | 查询标识符及其定义、声明、关系候选和条件 |
+| `cross_repository_links` | 固定 solution scope 内带两端引用的跨仓符号匹配 |
 | `team_knowledge` | 已发布团队知识；当前 bootstrap 阶段为空 |
 | `coverage/gaps` | 证据可用性、未覆盖内容和截断提示 |
 | `budget` | 证据条数、近似 token、symbol 和 relation 预算及实际使用量 |
 | `retrieval_trace` | retriever 版本、候选顺序、选择结果和省略原因 |
 
-v1.1 在 v1.0 的证据契约上增加 RRF 通道贡献。v1.2 把 lexical provider 明确区分为 `lexical_fts5`、`lexical_postgres_fts` 和 `lexical_zoekt`；一次检索只报告实际执行的通道。每条 evidence 和 trace candidate 都记录实际 lexical、`symbol_exact`、`relation_source` 的独立 rank、weight 和 reciprocal score。provider 的变化不会改变 citation、snapshot 或 evidence 的消费方式。
+v1.1 在 v1.0 的证据契约上增加 RRF 通道贡献。v1.2 把 lexical provider 明确区分为 `lexical_fts5`、`lexical_postgres_fts` 和 `lexical_zoekt`；一次检索只报告实际执行的通道。每条 evidence 和 trace candidate 都记录实际 lexical、`symbol_exact`、`relation_source` 的独立 rank、weight 和 reciprocal score。v1.3 增加不可变 solution snapshot scope、成员 role/ordinal、`solution_rrf`、跨仓 symbol link 和真实 `partial_visibility` 语义。provider 或 scope 类型变化不会改变 citation、snapshot 或 evidence 的消费方式。
 
 ## 预算语义
 
@@ -56,6 +57,14 @@ python -m aikb kb-context `
   --evidence-token-budget 1200
 ```
 
+跨仓运行先发布 solution manifest：
+
+```powershell
+python -m aikb kb-solution-context `
+  --solution linux-platform-example `
+  --query "platform_probe 如何进入 core_ready"
+```
+
 真实 Linux 6.18.40 验证生成：
 
 - Context ID：`context_8f20640aa1d2f62501cdb7ec`
@@ -69,8 +78,8 @@ python -m aikb kb-context `
 
 - 正式 lexical adapter 已支持 Zoekt；SQLite FTS5 和 PostgreSQL simple-text FTS 只用于本地 bootstrap 与服务不可用时回退。
 - `team_knowledge` 尚未接入已审核知识条目。
-- `partial_visibility` 当前为 `false`；进入团队服务后必须由 ACL 层计算。
+- solution PoC 可以根据显式允许仓库集合生成 `partial_visibility`，且隐藏成员不会进入 evidence、symbol、link 或 trace；正式团队服务仍必须由 OIDC/ACL/RLS 计算允许集合，不能信任客户端参数。
 - vector 检索仍是待评测 adapter；是否启用由真实问题集的增量收益决定。
-- 跨仓阶段会让 `scope.snapshots` 同时包含 solution snapshot 的多个仓库版本。
+- solution scope 已能让 `scope.snapshots` 同时包含固定的多个仓库版本；几十仓以上的选择性 repository router 尚未实现。
 
 Zoekt 端到端测试使用固定的官方预构建镜像，验证了导出、source-only 索引、JSON API 查询、scope 校验以及行位置回映射到权威 chunk；见 [GitHub Actions run 30753488893](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30753488893)。

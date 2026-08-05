@@ -13,11 +13,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateTable
 
 from aikb.catalog import Catalog
-from aikb.context_pack import build_context_pack
+from aikb.context_pack import build_context_pack, build_solution_context_pack
 from aikb.ingestion import ingest_source
 from aikb.postgres_catalog import PostgresCatalog
 from aikb.postgres_publish import PostgresSnapshotPublisher
+from aikb.postgres_solution import (
+    PostgresSolutionPublisher,
+    resolve_postgres_solution_scope,
+)
 from aikb.postgres_schema_v1 import metadata
+from aikb.postgres_solution_schema import solution_metadata
+from aikb.solution import SolutionManifest
 
 
 EXPECTED_TABLES = {
@@ -25,6 +31,10 @@ EXPECTED_TABLES = {
     "repository",
     "snapshot",
     "snapshot_event",
+    "solution",
+    "solution_snapshot",
+    "solution_snapshot_event",
+    "solution_snapshot_member",
     "blob",
     "analysis_artifact",
     "source_file",
@@ -41,7 +51,8 @@ EXPECTED_TABLES = {
 
 class PostgresSchemaUnitTests(unittest.TestCase):
     def test_schema_contains_versioned_catalog_and_vector_tables(self) -> None:
-        self.assertEqual(set(metadata.tables), EXPECTED_TABLES)
+        current_tables = set(metadata.tables) | set(solution_metadata.tables)
+        self.assertEqual(current_tables, EXPECTED_TABLES)
         self.assertNotIn("chunk_fts", metadata.tables)
         snapshot_indexes = {index.name for index in metadata.tables["snapshot"].indexes}
         self.assertIn("uq_snapshot_one_active_per_repository", snapshot_indexes)
@@ -92,7 +103,7 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             extension = connection.execute(
                 text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             ).scalar_one()
-        self.assertEqual(version, "2")
+        self.assertEqual(version, "3")
         self.assertTrue(extension)
         self.assertIn("content", {column["name"] for column in inspector.get_columns("chunk")})
 
@@ -461,6 +472,136 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
                             connection.execute(
                                 text("DELETE FROM blob WHERE id=:id"), {"id": blob_id}
                             )
+
+    def test_solution_publisher_pins_multiple_repositories_and_filters_visibility(
+        self,
+    ) -> None:
+        suffix = uuid.uuid4().hex
+        projects = [f"solution-core-{suffix}", f"solution-driver-{suffix}"]
+        repository_ids: list[str] = []
+        blob_ids: set[str] = set()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            local_catalog_path = root / "catalog.db"
+            with Catalog(local_catalog_path) as catalog:
+                catalog.initialize()
+                snapshot_ids: list[str] = []
+                for index, project in enumerate(projects):
+                    source = root / project
+                    source.mkdir()
+                    (source / "Makefile").write_text(
+                        "VERSION = 1\nPATCHLEVEL = 0\nSUBLEVEL = 0\nEXTRAVERSION =\n",
+                        encoding="utf-8",
+                    )
+                    (source / "Kconfig").write_text(
+                        'mainmenu "solution"\n', encoding="utf-8"
+                    )
+                    for directory in [
+                        "arch", "drivers", "fs", "kernel", "mm", "include"
+                    ]:
+                        (source / directory).mkdir()
+                    symbol = "solution_core" if index == 0 else "solution_driver"
+                    (source / "kernel" / "fixture.c").write_text(
+                        f"int {symbol}(void) {{ return {index}; }}\n",
+                        encoding="utf-8",
+                    )
+                    scope = {
+                        "scope_id": f"scope-{project}",
+                        "source": {
+                            "project": project,
+                            "version": "1.0.0",
+                            "kind": "release_archive",
+                            "archive_name": f"{project}.tar.xz",
+                            "archive_sha256": ("a" if index == 0 else "b") * 64,
+                            "git_commit": None,
+                        },
+                        "include_roots": ["kernel"],
+                        "exclude_globs": [],
+                        "index_policy": {
+                            "mode": "source_only",
+                            "execute_build": False,
+                            "requires_build_artifacts": False,
+                        },
+                    }
+                    snapshot = ingest_source(catalog, scope, source)
+                    snapshot_ids.append(snapshot["id"])
+                    repository_ids.append(
+                        catalog.connection.execute(
+                            "SELECT repository_id FROM snapshot WHERE id=?",
+                            (snapshot["id"],),
+                        ).fetchone()["repository_id"]
+                    )
+                blob_ids.update(
+                    row["id"] for row in catalog.connection.execute("SELECT id FROM blob")
+                )
+                snapshot_publisher = PostgresSnapshotPublisher(self.engine)
+                for snapshot_id in snapshot_ids:
+                    snapshot_publisher.publish(catalog, snapshot_id)
+
+                manifest = SolutionManifest.model_validate(
+                    {
+                        "name": f"solution-{suffix}",
+                        "revision": "r1",
+                        "members": [
+                            {
+                                "repository": projects[0],
+                                "snapshot_id": snapshot_ids[0],
+                                "role": "core",
+                            },
+                            {
+                                "repository": projects[1],
+                                "snapshot_id": snapshot_ids[1],
+                                "role": "driver",
+                            },
+                        ],
+                    }
+                )
+                publisher = PostgresSolutionPublisher(self.engine)
+                first = publisher.publish(manifest)
+                repeated = publisher.publish(manifest)
+                self.assertFalse(first.idempotent)
+                self.assertTrue(repeated.idempotent)
+
+                scope = resolve_postgres_solution_scope(
+                    self.engine, manifest.name
+                )
+                adapter = PostgresCatalog(POSTGRES_URL, engine=self.engine)
+                pack = build_solution_context_pack(
+                    adapter,
+                    "solution_core solution_driver",
+                    scope,
+                    max_evidence_items=4,
+                )
+                self.assertEqual(
+                    {item.repository for item in pack.evidence}, set(projects)
+                )
+                restricted = resolve_postgres_solution_scope(
+                    self.engine,
+                    manifest.name,
+                    allowed_repositories={projects[0]},
+                )
+                restricted_pack = build_solution_context_pack(
+                    adapter, "solution_core", restricted, max_evidence_items=4
+                )
+                serialized = restricted_pack.model_dump_json()
+                self.assertTrue(restricted_pack.scope.partial_visibility)
+                self.assertNotIn(projects[1], serialized)
+                self.assertNotIn(snapshot_ids[1], serialized)
+
+        with self.engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM solution WHERE name=:name"),
+                {"name": f"solution-{suffix}"},
+            )
+            for repository_id in repository_ids:
+                connection.execute(
+                    text("DELETE FROM repository WHERE id=:id"),
+                    {"id": repository_id},
+                )
+            for blob_id in blob_ids:
+                connection.execute(
+                    text("DELETE FROM blob WHERE id=:id"), {"id": blob_id}
+                )
 
 
 if __name__ == "__main__":
