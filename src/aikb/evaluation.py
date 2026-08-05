@@ -602,6 +602,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _metric_summary(metrics: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in metrics.items() if key != "per_question"}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -644,10 +648,10 @@ def main(argv: list[str] | None = None) -> int:
             json.dump(report, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
         summary = (
-            report["metrics"]
+            _metric_summary(report["metrics"])
             if args.command == "baseline"
             else {
-                name: value["metrics"]
+                name: _metric_summary(value["metrics"])
                 for name, value in report["retrievers"].items()
             }
         )

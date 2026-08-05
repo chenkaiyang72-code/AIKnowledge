@@ -81,11 +81,18 @@ class KnowledgeBaseTests(unittest.TestCase):
             hits = catalog.search("demo_init", top_k=5)
             summary = catalog.summary()
             symbol_report = catalog.find_symbol("helper")
+            relation_stage = catalog.connection.execute(
+                """
+                SELECT name FROM sqlite_temp_master
+                WHERE type = 'table' AND name = 'pending_relation_stage'
+                """
+            ).fetchone()
 
         self.assertFalse(first["idempotent"])
         self.assertTrue(second["idempotent"])
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(first["file_count"], 2)
+        self.assertIsNone(relation_stage)
         self.assertEqual(summary["snapshot_count"], 1)
         self.assertEqual(len(summary["active_snapshots"]), 1)
         active = summary["active_snapshots"][0]

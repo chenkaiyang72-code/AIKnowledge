@@ -22,7 +22,6 @@ from aikb.evaluation import inspect_source
 from aikb.source_relations import (
     AMBIGUOUS_CANDIDATE,
     SOURCE_INFERRED,
-    SourceRelation,
     extract_dependency_references,
     extract_source_facts,
     include_candidates,
@@ -76,14 +75,6 @@ class ScanResult:
     manifest_digest: str
     skipped_file_count: int
     byte_count: int
-
-
-@dataclass(frozen=True)
-class PendingRelation:
-    file_id: str
-    relative_path: str
-    relation: SourceRelation
-    condition_id: str | None
 
 
 @dataclass(frozen=True)
@@ -663,7 +654,30 @@ def ingest_source(
         unique_blobs: set[str] = set()
         symbol_ids_by_file_name_kind: dict[tuple[str, str, str], str] = {}
         symbol_ids_by_name_kind: dict[tuple[str, str], set[str]] = {}
-        pending_relations: list[PendingRelation] = []
+        # A full Linux tree can produce millions of relations.  Stage them in
+        # SQLite instead of retaining Python objects until every symbol has
+        # been discovered.  ``sequence`` preserves deterministic source order.
+        connection.execute(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS pending_relation_stage(
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                condition_id TEXT,
+                kind TEXT NOT NULL,
+                target_text TEXT NOT NULL,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                source_name TEXT,
+                source_kind TEXT,
+                target_kind TEXT,
+                target_path TEXT,
+                confidence TEXT NOT NULL,
+                generator TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("DELETE FROM pending_relation_stage")
         for candidate in scan.files:
             data = candidate.absolute_path.read_bytes()
             actual_blob_id = hashlib.sha256(data).hexdigest()
@@ -701,13 +715,19 @@ def ingest_source(
                 (analysis_artifact_id,),
             ).fetchone()
             if cached_analysis is None:
-                parse_outcome = build_chunks(
-                    data=data,
-                    language=candidate.language,
-                    chunk_lines=chunk_lines,
-                    overlap=chunk_overlap,
-                )
-                source_facts = extract_source_facts(data, candidate.language)
+                try:
+                    parse_outcome = build_chunks(
+                        data=data,
+                        language=candidate.language,
+                        chunk_lines=chunk_lines,
+                        overlap=chunk_overlap,
+                    )
+                    source_facts = extract_source_facts(data, candidate.language)
+                except Exception as error:
+                    raise RuntimeError(
+                        "source analysis failed for "
+                        f"{candidate.relative_path}: {error}"
+                    ) from error
                 artifact_conditions = set(source_facts.conditions)
                 artifact_conditions.update(
                     item.condition
@@ -745,9 +765,15 @@ def ingest_source(
                 )
                 analysis_cache_miss_count += 1
             else:
-                parse_outcome, source_facts = decode_analysis_artifact(
-                    zlib.decompress(cached_analysis["compressed_payload"])
-                )
+                try:
+                    parse_outcome, source_facts = decode_analysis_artifact(
+                        zlib.decompress(cached_analysis["compressed_payload"])
+                    )
+                except Exception as error:
+                    raise RuntimeError(
+                        "cached source analysis failed for "
+                        f"{candidate.relative_path}: {error}"
+                    ) from error
                 analysis_cache_hit_count += 1
             parse_error_count += parse_outcome.syntax_error_count
             connection.execute(
@@ -897,15 +923,33 @@ def ingest_source(
                 ).add(symbol_id)
                 symbol_occurrence_count += occurrence_cursor.rowcount
 
-            for relation in source_facts.relations:
-                pending_relations.append(
-                    PendingRelation(
-                        file_id=file_id,
-                        relative_path=candidate.relative_path,
-                        relation=relation,
-                        condition_id=condition_ids.get(relation.condition),
+            connection.executemany(
+                """
+                INSERT INTO pending_relation_stage(
+                    file_id, relative_path, condition_id, kind, target_text,
+                    start_line, end_line, source_name, source_kind,
+                    target_kind, target_path, confidence, generator)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        file_id,
+                        candidate.relative_path,
+                        condition_ids.get(relation.condition),
+                        relation.kind,
+                        relation.target_text,
+                        relation.start_line,
+                        relation.end_line,
+                        relation.source_name,
+                        relation.source_kind,
+                        relation.target_kind,
+                        relation.target_path,
+                        relation.confidence,
+                        relation.generator,
                     )
+                    for relation in source_facts.relations
                 )
+            )
             for ordinal, code_chunk in enumerate(parse_outcome.chunks):
                 content = code_chunk.content
                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -947,52 +991,54 @@ def ingest_source(
                 elif code_chunk.generator == FALLBACK_GENERATOR:
                     fallback_chunk_count += 1
 
-        for pending in pending_relations:
-            relation = pending.relation
+        staged_relations = connection.execute(
+            "SELECT * FROM pending_relation_stage ORDER BY sequence"
+        )
+        for pending in staged_relations:
             source_symbol_id: str | None = None
-            if relation.source_name and relation.source_kind:
+            if pending["source_name"] and pending["source_kind"]:
                 source_symbol_id = symbol_ids_by_file_name_kind.get(
                     (
-                        pending.relative_path,
-                        relation.source_name,
-                        relation.source_kind,
+                        pending["relative_path"],
+                        pending["source_name"],
+                        pending["source_kind"],
                     )
                 )
                 if source_symbol_id is None:
                     source_candidates = symbol_ids_by_name_kind.get(
-                        (relation.source_name, relation.source_kind), set()
+                        (pending["source_name"], pending["source_kind"]), set()
                     )
                     if len(source_candidates) == 1:
                         source_symbol_id = next(iter(source_candidates))
 
             target_symbol_id: str | None = None
             target_file_id: str | None = None
-            confidence = relation.confidence
-            if relation.target_kind:
+            confidence = pending["confidence"]
+            if pending["target_kind"]:
                 same_file_target = symbol_ids_by_file_name_kind.get(
                     (
-                        pending.relative_path,
-                        relation.target_text,
-                        relation.target_kind,
+                        pending["relative_path"],
+                        pending["target_text"],
+                        pending["target_kind"],
                     )
                 )
                 if same_file_target is not None:
                     target_symbol_id = same_file_target
                 else:
                     target_candidates = symbol_ids_by_name_kind.get(
-                        (relation.target_text, relation.target_kind), set()
+                        (pending["target_text"], pending["target_kind"]), set()
                     )
                     if len(target_candidates) == 1:
                         target_symbol_id = next(iter(target_candidates))
-                    elif relation.kind == "calls" or len(target_candidates) > 1:
+                    elif pending["kind"] == "calls" or len(target_candidates) > 1:
                         confidence = AMBIGUOUS_CANDIDATE
 
-            if relation.target_path and "$" not in relation.target_path:
-                target_path = relation.target_path
-                if relation.kind == "kbuild_contains" and target_path.endswith(".o"):
+            if pending["target_path"] and "$" not in pending["target_path"]:
+                target_path = pending["target_path"]
+                if pending["kind"] == "kbuild_contains" and target_path.endswith(".o"):
                     target_path = target_path[:-2] + ".c"
                 path_candidates = include_candidates(
-                    pending.relative_path, target_path, available_paths
+                    pending["relative_path"], target_path, available_paths
                 )
                 if len(path_candidates) == 1:
                     target_file_id = file_ids_by_path[path_candidates[0]]
@@ -1010,11 +1056,11 @@ def ingest_source(
 
             relation_id = stable_id(
                 "relation",
-                pending.file_id,
-                relation.kind,
-                relation.target_text,
-                str(relation.start_line),
-                str(relation.end_line),
+                pending["file_id"],
+                pending["kind"],
+                pending["target_text"],
+                str(pending["start_line"]),
+                str(pending["end_line"]),
                 source_symbol_id or "",
                 target_file_id or "",
                 target_symbol_id or "",
@@ -1030,20 +1076,22 @@ def ingest_source(
                 (
                     relation_id,
                     snapshot_id,
-                    pending.file_id,
+                    pending["file_id"],
                     source_symbol_id,
                     target_file_id,
                     target_symbol_id,
-                    pending.condition_id,
-                    relation.kind,
-                    relation.target_text,
-                    relation.start_line,
-                    relation.end_line,
+                    pending["condition_id"],
+                    pending["kind"],
+                    pending["target_text"],
+                    pending["start_line"],
+                    pending["end_line"],
                     confidence,
-                    relation.generator,
+                    pending["generator"],
                 ),
             )
             relation_count += relation_cursor.rowcount
+
+        connection.execute("DROP TABLE pending_relation_stage")
 
         if chunk_count < 1:
             raise RuntimeError("ingest produced no chunks")

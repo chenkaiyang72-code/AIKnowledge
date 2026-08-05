@@ -178,20 +178,22 @@ def _node_text(node: Any, data: bytes) -> str:
 
 
 def _symbol_from_declarator(node: Any, data: bytes) -> str | None:
-    if node is None:
-        return None
-    if node.type in {"identifier", "type_identifier", "field_identifier"}:
-        value = _node_text(node, data)
-        return value if _IDENTIFIER_PATTERN.match(value) else None
-    declarator = node.child_by_field_name("declarator")
-    if declarator is not None:
-        found = _symbol_from_declarator(declarator, data)
-        if found:
-            return found
-    for child in node.named_children:
-        found = _symbol_from_declarator(child, data)
-        if found:
-            return found
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        if current.type in {"identifier", "type_identifier", "field_identifier"}:
+            value = _node_text(current, data)
+            if _IDENTIFIER_PATTERN.match(value):
+                return value
+        declarator = current.child_by_field_name("declarator")
+        children = list(current.named_children)
+        # The old recursive walk preferred the declarator field, then named
+        # children in source order.  Reverse-push to preserve that order.
+        for child in reversed(children):
+            if declarator is None or child.id != declarator.id:
+                stack.append(child)
+        if declarator is not None:
+            stack.append(declarator)
     return None
 
 
@@ -248,7 +250,9 @@ def _extract_c_facts(data: bytes, text: str) -> SourceFacts:
     parser = Parser(Language(tree_sitter_c.language()))
     root = parser.parse(data).root_node
 
-    def walk(node: Any, current_function: str | None = None) -> None:
+    stack: list[tuple[Any, str | None]] = [(root, None)]
+    while stack:
+        node, current_function = stack.pop()
         next_function = current_function
         content = _node_text(node, data)
         start_line = node.start_point.row + 1
@@ -352,10 +356,8 @@ def _extract_c_facts(data: bytes, text: str) -> SourceFacts:
                         )
                     )
 
-        for child in node.named_children:
-            walk(child, next_function)
-
-    walk(root)
+        children = list(node.named_children)
+        stack.extend((child, next_function) for child in reversed(children))
     return SourceFacts(conditions, occurrences, relations)
 
 

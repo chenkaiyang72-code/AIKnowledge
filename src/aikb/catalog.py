@@ -288,6 +288,9 @@ class Catalog:
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA journal_mode = WAL")
         self.connection.execute("PRAGMA synchronous = NORMAL")
+        # Full-repository scans stage unresolved relations in a temporary
+        # table. Keep it disk-backed across SQLite build configurations.
+        self.connection.execute("PRAGMA temp_store = FILE")
 
     def __enter__(self) -> Catalog:
         return self

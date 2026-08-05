@@ -34,7 +34,23 @@ class StructuredChunkTests(unittest.TestCase):
         self.assertEqual(outcome.parse_status, "not_applicable")
         self.assertEqual(len(outcome.chunks), 2)
         self.assertEqual(outcome.chunks[0].generator, "line-window-v1")
-        self.assertEqual((outcome.chunks[1].start_line, outcome.chunks[1].end_line), (3, 4))
+        self.assertEqual(
+            (outcome.chunks[1].start_line, outcome.chunks[1].end_line), (3, 4)
+        )
+
+    def test_deep_preprocessor_tree_does_not_use_python_recursion(self) -> None:
+        depth = 1_100
+        source = (
+            ("#if CONFIG_DEEP\n" * depth)
+            + "static int deep_marker(void) { return 1; }\n"
+            + ("#endif\n" * depth)
+        ).encode("utf-8")
+
+        outcome = build_chunks(source, "c", chunk_lines=80, overlap=10)
+
+        self.assertTrue(
+            any(chunk.symbol == "deep_marker" for chunk in outcome.chunks)
+        )
 
 
 if __name__ == "__main__":

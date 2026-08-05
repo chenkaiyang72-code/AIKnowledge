@@ -95,9 +95,20 @@ def _extract_structured_chunks(
     if node.type not in CONTAINER_NODE_TYPES:
         return []
     chunks: list[CodeChunk] = []
-    leading_comments: list[tuple[int, int, int]] = []
-    for child_index in range(node.named_child_count):
-        child = node.named_child(child_index)
+    # Kernel headers can contain more nested preprocessor containers than
+    # Python's recursion limit.  Each frame stores node, next child index and
+    # that container's leading comments, preserving the recursive DFS order.
+    stack: list[list[Any]] = [[node, 0, []]]
+    while stack:
+        frame = stack[-1]
+        current = frame[0]
+        child_index = frame[1]
+        leading_comments = frame[2]
+        if child_index >= current.named_child_count:
+            stack.pop()
+            continue
+        frame[1] += 1
+        child = current.named_child(child_index)
         if child is None:
             continue
         if child.type == "comment":
@@ -134,12 +145,9 @@ def _extract_structured_chunks(
             leading_comments = []
             continue
         leading_comments = []
+        frame[2] = leading_comments
         if child.type in CONTAINER_NODE_TYPES:
-            chunks.extend(
-                _extract_structured_chunks(
-                    child, data, max_structured_lines, overlap
-                )
-            )
+            stack.append([child, 0, []])
     return chunks
 
 

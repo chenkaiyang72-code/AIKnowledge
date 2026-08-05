@@ -78,6 +78,20 @@ class SourceRelationTests(unittest.TestCase):
         )
         self.assertEqual(candidates, ["include/demo.h"])
 
+    def test_deep_preprocessor_tree_extracts_facts_iteratively(self) -> None:
+        depth = 1_100
+        source = (
+            ("#if CONFIG_DEEP\n" * depth)
+            + "static int deep_relation_marker(void) { return 1; }\n"
+            + ("#endif\n" * depth)
+        ).encode("utf-8")
+
+        facts = extract_source_facts(source, "c")
+
+        self.assertTrue(
+            any(item.name == "deep_relation_marker" for item in facts.occurrences)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
