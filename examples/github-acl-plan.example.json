@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "security_domain_id": "domain-kernel-platform",
+  "repository_id": "replace-with-indexed-repository-id",
+  "github": {
+    "owner": "example-organization",
+    "repository": "linux-fork",
+    "api_base_url": "https://api.github.com"
+  },
+  "bindings": [
+    {
+      "github_user_id": 12345678,
+      "principal_id": "principal-alice"
+    }
+  ]
+}

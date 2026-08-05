@@ -23,6 +23,7 @@ KNOWLEDGE_COMMANDS = {
     "kb-zoekt-export",
     "kb-security-apply",
     "kb-security-revoke-tokens",
+    "kb-github-acl-plan",
 }
 
 
@@ -52,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
             "  kb-zoekt-export  materialize an immutable snapshot for Zoekt\n\n"
             "  kb-security-apply  atomically apply a team security manifest\n"
             "  kb-security-revoke-tokens  invalidate a principal's existing tokens\n\n"
+            "  kb-github-acl-plan  produce a read-only GitHub access diff\n\n"
             "MCP command:\n"
             "  mcp-serve      run the read-only stdio or Streamable HTTP server\n\n"
             "Run 'python -m aikb <command> --help' for command options."

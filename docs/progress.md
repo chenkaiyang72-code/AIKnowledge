@@ -1,8 +1,8 @@
 # AIKnowledge 项目进展
 
 最后更新：2026-08-06<br>
-当前阶段：Phase 1B 团队安全试点（OIDC/RLS/audit 已通过共享 CI，security admin CLI 待共享 CI）<br>
-当前结论：跨仓 solution snapshot 和只读 MCP 已形成端到端链路；固定算法 JWT/JWKS、issuer/audience/scope/time/revocation、最小数据库角色、HTTP 401、RFC 9728 metadata、认证 principal 到 RLS Context Pack，以及不含问题/源码的 MCP audit 已在共享 PostgreSQL CI 通过 57/57 测试，见 [run 31049508639](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31049508639)。原子、增量、无隐式删除的 security manifest CLI 和显式 token revoke 已完成本地实现，下一步在共享数据库终验后进入真实 IdP/客户端联调。
+当前阶段：Phase 1B 团队安全试点（OIDC/RLS/audit 与 security admin 已通过共享 CI，GitHub ACL planner 待共享 CI）<br>
+当前结论：跨仓 solution snapshot 和只读 MCP 已形成端到端链路；OIDC/RLS/audit 已在共享 CI 通过 57/57，见 [run 31049508639](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31049508639)；原子 security manifest、显式 membership/grant/token revoke 随后通过 61/61，见 [run 31050256639](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31050256639)。GitHub effective collaborator 只读抓取、numeric user ID binding 和 direct grant 差异计划已完成本地实现；在 grant provenance 建立前，撤权只列候选、不自动执行。
 
 ## 维护规则
 
@@ -19,7 +19,7 @@
 | 2 | Phase 0B 结构化检索 | 建立第一版单仓代码知识索引 | 不可变 snapshot、Tree-sitter、source-only 关系索引、Zoekt、pgvector、混合检索、Context Pack | Evidence Recall@10、版本准确率和负样本指标达到门槛 | 工程实现完成，正式验收待人工复核 |
 | 3 | Phase 0C 跨仓 PoC | 让一个问题可以在一致版本下检索多个仓库 | solution snapshot、仓库路由、跨仓关系、跨仓引用 | 至少 10 个跨仓问题通过评测 | 完成：10 题指标 1.0，共享 CI 43/43 通过 |
 | 4 | Phase 1A 只读 MCP | 把知识检索能力提供给现有 AI 客户端 | `/mcp/read`、scope/context tools、Cursor 和 Claude Code 接入 | 两类客户端可以稳定取得相同 Context Pack | 本地工程与 Claude Code 完成，Cursor UI 待验收 |
-| 5 | Phase 1B 团队安全试点 | 支持多人安全共享 | OIDC、仓库 ACL、PostgreSQL RLS、数据出域策略、审计、增量索引 | 越权测试零泄露，索引可增量更新 | 进行中：OIDC/RLS/audit CI 通过，admin/真实联调待完成 |
+| 5 | Phase 1B 团队安全试点 | 支持多人安全共享 | OIDC、仓库 ACL、PostgreSQL RLS、数据出域策略、审计、增量索引 | 越权测试零泄露，索引可增量更新 | 进行中：认证/admin CI 通过，ACL planner/真实联调待完成 |
 | 6 | Phase 1C 知识进化闭环 | 让团队提问和反馈转化为受治理的共享知识 | feedback、gap、claim、review、publish、最小管理 UI | 至少一条真实知识完成完整审核发布流程 | 未开始 |
 | 7 | Phase 2 及以后 | 支持开发态代码、更多知识源和规模化部署 | workspace overlay、ADR/Issue/PR connector、更多语言、分片和高可用 | 根据试点指标逐项决定 | 未开始 |
 
@@ -181,7 +181,9 @@ Phase 1A 提交 `e475042` 已在共享 PostgreSQL 17 + pgvector + Zoekt 环境�
 - OIDC/RLS/audit 全链路已在 PostgreSQL 17 + pgvector + Zoekt 完成 57/57 共享 CI，错误 identity/domain/audience 均零泄露，见 [run 31049508639](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31049508639)。
 - 新增严格 JSON security manifest 与 `kb-security-apply`：domain/principal/team/membership/grant 在一个事务中增量 upsert，未声明对象不删除，principal 不允许跨域或替换 OIDC identity；`--dry-run` 运行相同校验并回滚。
 - repository grant 支持 manifest 显式撤销/恢复；`kb-security-revoke-tokens` 单调推进 `tokens_valid_after`。管理员连接与 MCP service login 分离，不向普通用户开放 SQL。
-- 当前本地共发现 61 项测试：53 项通过，8 项依赖 PostgreSQL/Zoekt 集成环境的测试按设计跳过；新增 security admin 集成用例等待共享 CI 验收。
+- security admin 已在共享 PostgreSQL 完成 61/61：dry-run 零落库、重复 apply 幂等、显式移出/恢复 membership、grant revoke、token revoke 与 `aikb_reader` RLS 可见性均通过，见 [run 31050256639](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31050256639)。
+- 新增 GitHub ACL 只读 planner：固定 REST API version、HTTPS/no-redirect、同 origin/endpoint 分页校验；把 effective read/write/admin 映射到已绑定 principal，分离 activate/update、人工 revoke candidate、未绑定 collaborator 和 stale binding，整个 planner 不写数据库。
+- 当前本地共发现 65 项测试：56 项通过，9 项依赖 PostgreSQL/Zoekt 集成环境的测试按设计跳过；新增 GitHub ACL planner 真实数据库只读用例等待共享 CI。
 
 ## 3. 还未完成的计划
 
@@ -195,7 +197,8 @@ Phase 1A 提交 `e475042` 已在共享 PostgreSQL 17 + pgvector + Zoekt 环境�
 | --- | --- | --- | --- |
 | P0 | 完成实际客户端矩阵 | 在本机 Cursor UI 按文档连接 stdio 并调用三个工具；Claude Code 已完成真实健康检查 | Cursor 与 Claude Code 取得相同 solution scope、evidence 与 citation |
 | P0 | 完成真实 IdP/客户端矩阵 | 配置试点 OIDC issuer/JWKS/resource，Cursor/Claude 走标准 discovery | 两类客户端以不同 principal 只取得各自授权 Context Pack |
-| P0 | 终验 security admin CLI | 在共享 PostgreSQL 对 manifest 执行 dry-run、重复 apply、grant revoke 和 token revoke | 原子回滚、幂等与 RLS 可见性测试全部通过 |
+| P0 | 终验 GitHub ACL planner | 在共享 PostgreSQL 验证 effective collaborator 到 direct grant 的只读差异 | 数据库零写入，新增/权限变化/撤权候选/未绑定四类准确分离 |
+| P0 | 建立 grant provenance | schema 区分 manifest/manual/GitHub 授权来源和同步 revision | 外部撤权只能影响同一 connector 管理的 grant，不能误伤人工授权 |
 | P1 | 修复候选池外检索缺口 | 优先分析 vmalloc/kmalloc 文档、oldconfig 行范围和 module 问题 | 不靠目录硬编码，新增召回或 source-only 规则由证据和回归测试支撑 |
 
 本地扫描和 PostgreSQL 共享存储的首条链路已经打通，但以下仍未完成：
@@ -213,7 +216,7 @@ Phase 1A 提交 `e475042` 已在共享 PostgreSQL 17 + pgvector + Zoekt 环境�
 
 - 跨仓 solution snapshot、路由基线和 PoC 部分可见性已完成；真实团队问题人工验收及大规模选择性路由尚未完成。
 - Claude Code 只读 MCP 接入已验证；Cursor UI 与 VS Code/Copilot 兼容验证尚未完成。
-- principal/team/grant/RLS、OIDC/JWT 和 MCP audit 工程基础已实现；真实 IdP、数据出域策略、ACL 同步和更广安全测试尚未完成。
+- principal/team/grant/RLS、OIDC/JWT、MCP audit 和安全管理 CLI 已实现；GitHub ACL 只读规划完成，真实 IdP、grant provenance/受控 apply、数据出域策略和更广安全测试尚未完成。
 - feedback、gap、claim、review、publish 知识进化闭环尚未实现。
 - Web 管理控制台、workspace overlay 和更多知识源 connector 尚未实现。
 
@@ -239,11 +242,12 @@ Phase 1A 提交 `e475042` 已在共享 PostgreSQL 17 + pgvector + Zoekt 环境�
 | 14 | 实现跨仓 solution snapshot | Codex | schema、固定成员版本、resolver、两阶段检索、partial visibility、跨仓 Context Pack | 已完成：10 题 routing recall 与版本准确率均为 1.0，共享 CI 43/43 通过 |
 | 15 | 实现只读 MCP MVP | Codex | 固定 SDK、read-only tools、stdio/Streamable HTTP、协议测试 | 本地工程与 Claude Code 真实连接完成；Cursor UI 验收待执行 |
 | 16 | 实现团队身份与 ACL 边界 | Codex | principal、repository grant、RLS、审计、OAuth verifier | 已完成工程终验：共享 PostgreSQL CI 57/57；真实 IdP 联调待完成 |
-| 17 | 建立安全管理入口 | Codex | 严格 manifest、原子增量 apply/dry-run、grant 与 token revoke | 本地 61 项发现、53 通过、8 个环境跳过；共享 CI 待完成 |
+| 17 | 建立安全管理入口 | Codex | 严格 manifest、原子增量 apply/dry-run、membership/grant/token revoke | 已完成：共享 PostgreSQL CI 61/61 通过 |
+| 18 | 建立 GitHub ACL 只读规划 | Codex | effective collaborator 分页、numeric ID binding、grant diff、撤权候选 | 本地 65 项发现、56 通过、9 个环境跳过；共享 CI 待完成 |
 
 ### 现在立即要做的动作
 
-下一项工作先让共享 PostgreSQL 17 终验 security manifest 的事务回滚、重复 apply、grant revoke、token revoke 和 RLS 可见性；通过后实现 GitHub ACL 同步的只读规划/差异层，并准备真实 IdP/Cursor/Claude 配置矩阵。远程部署必须同时具备精确 token audience 与非 owner 数据库角色，不提供降级到静态 header 的开关。
+下一项工作先让共享 PostgreSQL 17 终验 GitHub ACL planner 的零写入与四类差异；通过后为 grant 增加来源/provenance 和同步 revision，再考虑受控 apply。并行准备真实 IdP/Cursor/Claude 配置矩阵。远程部署必须同时具备精确 token audience 与非 owner 数据库角色，不提供降级到静态 header 的开关。
 
 ## 相关文档
 
@@ -257,6 +261,7 @@ Phase 1A 提交 `e475042` 已在共享 PostgreSQL 17 + pgvector + Zoekt 环境�
 - [本地混合检索 v1](hybrid-retrieval.md)
 - [PostgreSQL/pgvector schema v1](postgres-schema-v1.md)
 - [团队身份与仓库授权管理](security-admin.md)
+- [GitHub repository ACL 只读差异计划](github-acl-planning.md)
 - [Zoekt source-only 索引与检索适配器](zoekt-adapter.md)
 - [Linux 6.18.40 全树 source-only 验证](full-tree-validation.md)
 - [结构化检索自动评测报告](../evals/reports/linux-6.18.40-structured.md)

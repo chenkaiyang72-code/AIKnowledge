@@ -95,7 +95,7 @@ python -m aikb mcp-serve `
 
 未认证 HTTP 始终被强制限制在 loopback；只有同时配置 OIDC/JWKS、精确 token audience、repository ACL 和 PostgreSQL 非 owner RLS 角色时，服务才允许监听非 loopback 地址。Cursor 与 Claude Code 的完整配置见[MCP 运行文档](docs/mcp-read-server.md)。
 
-远程安全链路已通过共享 PostgreSQL CI：JWT/OIDC、RFC 9728 discovery、principal directory、PostgreSQL RLS 和 metadata-only audit 的配置见[远程 MCP 文档](docs/remote-mcp-auth.md)。团队、成员和仓库授权使用版本化 manifest 管理，见[安全管理文档](docs/security-admin.md)。默认命令不存在开放未认证远程地址的降级开关。
+远程安全链路已通过共享 PostgreSQL CI：JWT/OIDC、RFC 9728 discovery、principal directory、PostgreSQL RLS 和 metadata-only audit 的配置见[远程 MCP 文档](docs/remote-mcp-auth.md)。团队、成员和仓库授权使用版本化 manifest 管理，见[安全管理文档](docs/security-admin.md)；GitHub effective collaborators 目前只生成[只读 ACL 差异计划](docs/github-acl-planning.md)。默认命令不存在开放未认证远程地址的降级开关。
 
 PostgreSQL schema 和 migration 可选安装：
 

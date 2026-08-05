@@ -242,6 +242,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    github_acl_parser = subparsers.add_parser(
+        "kb-github-acl-plan",
+        help="compare effective GitHub collaborators with direct repository grants",
+    )
+    github_acl_parser.add_argument("--config", type=Path, required=True)
+    github_acl_parser.add_argument(
+        "--snapshot",
+        type=Path,
+        help="use an offline GitHub ACL snapshot instead of calling GitHub",
+    )
+    github_acl_parser.add_argument(
+        "--postgres-admin-url",
+        help=(
+            "owner/admin SQLAlchemy URL; prefer "
+            "AIKB_SECURITY_ADMIN_POSTGRES_URL"
+        ),
+    )
+
     subparsers.add_parser(
         "kb-context-schema",
         help="print the generated JSON Schema for Context Pack v1",
@@ -258,6 +276,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in {
             "kb-security-apply",
             "kb-security-revoke-tokens",
+            "kb-github-acl-plan",
         }:
             postgres_url = args.postgres_admin_url or os.environ.get(
                 "AIKB_SECURITY_ADMIN_POSTGRES_URL"
@@ -270,10 +289,18 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 from sqlalchemy import create_engine
 
-                from aikb.security_admin import (
-                    PostgresSecurityAdmin,
-                    load_security_manifest,
-                )
+                if args.command == "kb-github-acl-plan":
+                    from aikb.github_acl import (
+                        GitHubCollaboratorClient,
+                        PostgresGitHubACLPlanner,
+                        load_github_acl_config,
+                        load_github_acl_snapshot,
+                    )
+                else:
+                    from aikb.security_admin import (
+                        PostgresSecurityAdmin,
+                        load_security_manifest,
+                    )
             except ImportError as error:
                 raise RuntimeError(
                     "PostgreSQL support is not installed; run "
@@ -281,13 +308,31 @@ def main(argv: list[str] | None = None) -> int:
                 ) from error
             engine = create_engine(postgres_url, pool_pre_ping=True)
             try:
-                admin = PostgresSecurityAdmin(engine)
-                if args.command == "kb-security-apply":
+                if args.command == "kb-github-acl-plan":
+                    config = load_github_acl_config(args.config)
+                    if args.snapshot is not None:
+                        snapshot = load_github_acl_snapshot(args.snapshot)
+                    else:
+                        github_token = os.environ.get("AIKB_GITHUB_TOKEN")
+                        if not github_token:
+                            raise ValueError(
+                                "set AIKB_GITHUB_TOKEN or pass --snapshot"
+                            )
+                        snapshot = GitHubCollaboratorClient(github_token).fetch(
+                            config.github
+                        )
+                    report = PostgresGitHubACLPlanner(engine).plan(
+                        config,
+                        snapshot,
+                    ).as_dict()
+                elif args.command == "kb-security-apply":
+                    admin = PostgresSecurityAdmin(engine)
                     report = admin.apply(
                         load_security_manifest(args.manifest),
                         dry_run=args.dry_run,
                     ).as_dict()
                 else:
+                    admin = PostgresSecurityAdmin(engine)
                     report = admin.revoke_tokens(args.principal_id)
             finally:
                 engine.dispose()
