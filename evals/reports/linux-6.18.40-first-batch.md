@@ -1,6 +1,6 @@
 # Linux 6.18.40 第一批真实问题基线报告
 
-运行日期：2026-08-02
+运行日期：2026-08-06
 数据集：`questions.first-batch.jsonl`
 检索器：ripgrep fixed-string，按“命中检索词数量，再按命中次数”排序
 Top K：10
@@ -12,7 +12,7 @@ Top K：10
 本轮检索结果：
 
 - Evidence Recall@10：`0.5000`（18 个证据文件找回 9 个）
-- MRR：`0.3033`
+- MRR：`0.3583`
 - 证据文件全部找回：3 题
 - 证据文件部分找回：3 题
 - 证据文件未找回：4 题
@@ -25,8 +25,8 @@ Top K：10
 | --- | --- | --- |
 | `linux-web-001` likely/unlikely | 未找回 | `likely` 和 `unlikely` 命中过多并被截断，调用点排在 `include/linux/compiler.h` 前面 |
 | `linux-web-002` vmalloc/kmalloc | 未找回 | 同时出现两个词的实现和测试文件得分更高，内存分配文档未进入前 10 |
-| `linux-web-003` container_of | 全部找回 | `include/linux/container_of.h` 排名第 2 |
-| `linux-web-006` oldconfig | 未找回 | 使用说明和无关的 `check_conf` 同名命中压过 `scripts/kconfig/conf.c` |
+| `linux-web-003` container_of | 未找回 | 高频宏调用和相关头文件命中压过 `include/linux/container_of.h` |
+| `linux-web-006` oldconfig | 全部找回 | 将 `scripts/` 纳入固定范围后，`scripts/kconfig/conf.c` 排名第 1 |
 | `linux-web-008` __user | 部分找回 | 找回 `include/linux/uaccess.h`，未找回定义地址空间约束的 `compiler_types.h` |
 | `linux-web-011` platform driver | 全部找回 | 三个精确符号共同命中，`drivers/base/platform.c` 排名第 1 |
 | `linux-web-013` EXPORT_SYMBOL | 未找回 | 大量导出调用点占满前 10，宏定义和模块装载限制均未进入前 10 |
@@ -56,7 +56,7 @@ python -m aikb baseline `
   --scope evals/datasets/linux-6.18.40/scope.json `
   --questions evals/datasets/linux-6.18.40/questions.first-batch.jsonl `
   --source $source `
-  --output evals/results/linux-6.18.40-first-batch.json
+  --output evals/results/linux-6.18.40-first-batch-scope-v2.json
 ```
 
 `evals/results/` 保存本机生成的逐条原始结果并由 Git 忽略；本报告保存可审阅和可追踪的结论。

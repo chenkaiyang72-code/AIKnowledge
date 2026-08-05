@@ -116,14 +116,14 @@ python -m aikb kb-context `
 
 `kb-symbol --name init_idle` 能同时返回 `include/linux/sched/task.h:64` 的声明、`kernel/sched/core.c:7969-8027` 的定义、`sched_init -> init_idle` 入边和 `init_idle` 内部调用候选；只在当前扫描范围中找到唯一目标的调用标记为 `source_inferred`，范围外或多候选目标标记为 `ambiguous_candidate`。C header 与 C implementation 目前仍保留不同 logical symbol ID，后续只能在签名、定义数量和条件兼容性足够时归并，不能仅凭同名产生虚假唯一关系。
 
-schema v4 增加 `analysis_artifact`：以 `blob SHA-256 + language + analysis_profile_digest` 唯一标识压缩后的 chunk、occurrence、condition 和 relation 原始分析产物；schema v5 增加种子/依赖文件数和依赖诊断统计。默认扩展首次验证为 52 hit/166 miss；只改变 snapshot 的依赖文件预算后为 218 hit/0 miss。缓存只省去解析，snapshot 级路径、引用和关系绑定仍会重新物化，避免跨版本引用混用；扫描范围和预算不进入 blob analysis profile。
+schema v4 增加 `analysis_artifact`：以 `blob SHA-256 + language + analysis_profile_digest` 唯一标识压缩后的 chunk、occurrence、condition 和 relation 原始分析产物；schema v5 增加种子/依赖文件数和依赖诊断统计。默认扩展首次验证为 52 hit/166 miss；只改变 snapshot 的依赖文件预算后为 218 hit/0 miss。冷扫描现在每 250 个文件提交一批内容寻址 blob 与 analysis artifact；已完成批次可在 snapshot 失败后复用，但 snapshot 级路径、引用、关系和 FTS 仍会在完整校验后原子激活。扫描范围和预算不进入 blob analysis profile。
 
 如果同一个不可变 snapshot 已存在但当前为 `superseded`，再次运行对应 ingest 会原子重新激活它并记录 snapshot event，不会重新解析或复制数据。
 
 ## 当前还不能声称什么
 
-- 还没有扫描完整 Linux 源码树。
-- 已实现第一版 source-only occurrence、预处理条件、include、Kconfig/Kbuild、调用候选、有界依赖扩展和按 blob 复用的分析缓存；复杂变量展开和更大规模性能仍需验证。
+- 已完成固定 scope 的 Linux 6.18.40 全树扫描：70,925 个文件、3,970,532 个 chunk、5,125,759 个 occurrence、5,098,771 条关系；详见[全树验证](full-tree-validation.md)。这证明了单机 source-only 路径可运行，不代表已经具备后台任务编排、增量调度和生产 SLA。
+- 已实现第一版 source-only occurrence、预处理条件、include、Kconfig/Kbuild、调用候选、有界依赖扩展和按 blob 复用的分析缓存；复杂变量展开与声明/定义安全归并仍需扩展。
 - 项目明确不生成 build profile、不依赖 `.config` 或 `compile_commands.json`，也不执行 Linux 构建。
 - 已有 PostgreSQL/pgvector schema、原子 publisher、Zoekt lexical adapter 和 lexical/symbol/relation RRF；vector 通道仍待效果评测。
 - 已有 Context Pack v1.2；还没有 MCP、权限与多人共享服务。

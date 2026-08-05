@@ -80,9 +80,22 @@ python -m aikb baseline `
   --scope evals/datasets/linux-6.18.40/scope.json `
   --questions evals/datasets/linux-6.18.40/questions.first-batch.jsonl `
   --source $source `
-  --output evals/results/linux-6.18.40-first-batch.json
+  --output evals/results/linux-6.18.40-first-batch-scope-v2.json
 ```
 
-第一批结果见 `evals/reports/linux-6.18.40-first-batch.md`：Evidence Recall@10 为 `0.5000`，MRR 为 `0.3033`。该结果只用于暴露检索缺陷，不能替代人工证据复核。
+第一批结果见 `evals/reports/linux-6.18.40-first-batch.md`：固定范围包含 `scripts/` 后，Evidence Recall@10 为 `0.5000`，MRR 为 `0.3583`。该结果只用于暴露检索缺陷，不能替代人工证据复核。
 
-正式进入下一阶段前，需要收集 30～50 道真实问题，其中至少 20% 是“当前源码中证据不足或无法回答”的负样本。
+全树结构化评测：
+
+```powershell
+python -m aikb structured `
+  --db .aikb/linux-full-eval.db `
+  --questions evals/datasets/linux-6.18.40/questions.first-batch.jsonl `
+  --output evals/results/linux-6.18.40-structured.json `
+  --markdown-output evals/reports/linux-6.18.40-structured.md `
+  --top-k 10
+```
+
+当前无向量 hybrid 基线的 File Recall@10 为 `0.7222`、Evidence Range Recall@10 为 `0.5926`、File MRR 为 `0.8500`、Range MRR 为 `0.6833`。逐题结果见 `evals/reports/linux-6.18.40-structured.md`。
+
+按照用户决定，人工证据复核、扩充到 30～50 题和负样本目前继续暂停；现有 10 题和 draft evidence 只作为自动回归与技术决策输入，不删除也不冒充冻结黄金集。

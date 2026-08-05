@@ -49,12 +49,23 @@ Linux 6.18.40 `kernel/sched` 活动 snapshot 上：
 
 这些数字是当前 Windows 本地 PoC 的单次观测，不作为生产 SLA。后续必须在更大范围、并发和 PostgreSQL/Zoekt 环境重新测量。
 
+Linux 6.18.40 全树 snapshot 的 10 题自动评测进一步得到：
+
+| 检索器 | File Recall@10 | Range Recall@10 | File MRR | Range MRR | 完整/部分/未命中 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `lexical_fts5` | 0.5556 | 0.2593 | 0.7000 | 0.5167 | 0/6/4 |
+| `lexical_fts5+symbol_exact+relation_source` | 0.7222 | 0.5926 | 0.8500 | 0.6833 | 5/3/2 |
+
+本轮同时发现并修复两类规模问题：relation 的跨 JOIN OR 会扫描全部 5,098,771 条关系，现拆成三个索引候选通道，真实查询降到约 0.010～0.022 秒；多行 macro occurrence 与单行 macro chunk 现按范围重叠映射，避免 `likely`、`container_of`、`EXPORT_SYMBOL` 等真正定义被漏掉。完整报告见[全树验证](full-tree-validation.md)。
+
 ## 性能设计
 
-FTS5 只用于 `MATCH`。symbol/relation 通道不再用 `chunk_id` 等值扫描 FTS5 虚表，而是从内容寻址 blob 解压对应文件并按 chunk 行范围读取正文。catalog 增加 `chunk(file_id,start_line,end_line)`、relation source/target 索引，为后续存储 adapter 保留相同查询语义。
+FTS5 只用于 `MATCH`。symbol/relation 通道不再用 `chunk_id` 等值扫描 FTS5 虚表，而是从内容寻址 blob 解压对应文件并按 chunk 行范围读取正文。symbol 通道按查询标识符分别执行 definition-first 有界召回；relation 通道分别使用 source symbol、target symbol 和 target text 索引，再合并有界候选。catalog 增加 `chunk(file_id,start_line,end_line)`、relation source/target 索引，为后续存储 adapter 保留相同查询语义。
+
+SQLite FTS 在 397 万 chunk 上完成 10 题 BM25 全局排序约需 605 秒，只承担离线 baseline。评测器支持严格校验的 lexical cache，后续只调整 symbol/relation/vector/reranker 时可把同一 snapshot 的下游消融缩短到秒级；正式线上 lexical 仍使用 Zoekt。
 
 ## 下一步
 
-1. 用现有真实问题集自动对比 FTS baseline、Zoekt + symbol/relation RRF。
-2. 接入 pgvector 实验通道，但只有 Evidence Recall@10/MRR 有可复现增益时才保留 embedding/reranker。
+1. 已完成现有真实问题集的 FTS 与 symbol/relation RRF 全树自动对比。
+2. 接入 pgvector 实验通道，但只有相对当前无向量基线的 Evidence Recall@10/MRR 有可复现增益时才保留 embedding/reranker。
 3. 增加跨仓 solution snapshot 路由，使多个不可变 repository snapshot 进入同一检索 scope。

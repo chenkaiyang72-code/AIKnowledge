@@ -20,6 +20,8 @@
 - [本地混合检索 v1：lexical/symbol/relation RRF](docs/hybrid-retrieval.md)
 - [PostgreSQL/pgvector schema v1](docs/postgres-schema-v1.md)
 - [Zoekt source-only 索引与检索适配器](docs/zoekt-adapter.md)
+- [Linux 6.18.40 全树 source-only 验证](docs/full-tree-validation.md)
+- [结构化检索自动评测报告](evals/reports/linux-6.18.40-structured.md)
 
 首版技术路线：Python 模块化单体与独立 worker，使用 PostgreSQL/pgvector 保存元数据和向量，使用 Tree-sitter、源码标识符/关系提取器和 Zoekt 建立无需编译的代码索引，并通过只读 MCP 网关向不同 AI 客户端提供带版本和引用的 Context Pack。
 
@@ -49,7 +51,7 @@ python -m aikb kb-context `
   --evidence-token-budget 1200
 ```
 
-默认数据库位于 `.aikb/catalog.db`。`kb-symbol` 返回定义/声明、调用和 include 等直接扫描关系，并明确标注 `source_exact`、`source_inferred` 或 `ambiguous_candidate`。`kb-retrieve` 用确定性 RRF 融合 lexical、精确 symbol 和直接 relation 三个通道；`kb-context` 把融合结果输出为带不可变 snapshot、blob/chunk 哈希、稳定 citation、预算和 retrieval trace 的 Context Pack v1.2，没有证据时明确返回 gap。依赖扩展默认读取 scope 中的深度、文件数和每条引用候选数预算；只改变扫描预算不会使未变化源码的分析缓存失效。SQLite 只用于本地 bootstrap；团队共享主库仍按设计使用 PostgreSQL/pgvector。
+默认数据库位于 `.aikb/catalog.db`。`kb-symbol` 返回定义/声明、调用和 include 等直接扫描关系，并明确标注 `source_exact`、`source_inferred` 或 `ambiguous_candidate`。`kb-retrieve` 用确定性 RRF 融合 lexical、精确 symbol 和直接 relation 三个通道；`kb-context` 把融合结果输出为带不可变 snapshot、blob/chunk 哈希、稳定 citation、预算和 retrieval trace 的 Context Pack v1.2，没有证据时明确返回 gap。依赖扩展默认读取 scope 中的深度、文件数和每条引用候选数预算；只改变扫描预算不会使未变化源码的分析缓存失效。冷扫描先按有界批次持久化内容寻址分析缓存，完整 snapshot 仍只在计数校验后原子激活。SQLite 只用于本地 bootstrap；团队共享主库仍按设计使用 PostgreSQL/pgvector。
 
 PostgreSQL schema 和 migration 可选安装：
 
@@ -87,6 +89,21 @@ python -m aikb kb-retrieve `
 ```
 
 Zoekt 容器的固定版本、索引和启动命令见[运行文档](docs/zoekt-adapter.md)。未设置 `AIKB_ZOEKT_URL` 时使用 catalog FTS；设置后若服务暂时不可用，默认回退到 SQLite/PostgreSQL FTS，生产验收可用 `--zoekt-required` 禁止回退。
+
+## 全树评测
+
+Linux 6.18.40 固定 scope 已完成 70,925 文件的 source-only 全树扫描，生成 3,970,532 个 chunk、5,125,759 个 symbol occurrence 和 5,098,771 条关系。10 个真实问题上的无向量 hybrid 基线为 File Recall@10 `0.7222`、Evidence Range Recall@10 `0.5926`、File MRR `0.8500`、Range MRR `0.6833`；完整细节和资源数据见[全树验证文档](docs/full-tree-validation.md)。
+
+```powershell
+python -m aikb structured `
+  --db .aikb/linux-full-eval.db `
+  --questions evals/datasets/linux-6.18.40/questions.first-batch.jsonl `
+  --output evals/results/linux-6.18.40-structured.json `
+  --markdown-output evals/reports/linux-6.18.40-structured.md `
+  --top-k 10
+```
+
+SQLite FTS 全树运行约需 10 分钟；正式 lexical 通道使用 Zoekt。后续只调整 symbol/relation/vector/reranker 时，可以使用 `--reuse-lexical-from` 复用经过 schema、问题、查询、Top K 和 snapshot 校验的 lexical 结果。
 
 ## 核心原则
 

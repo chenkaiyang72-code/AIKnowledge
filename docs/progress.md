@@ -1,8 +1,8 @@
 # AIKnowledge 项目进展
 
-最后更新：2026-08-02<br>
-当前阶段：Phase 0B 本地知识库启动骨架（进行中）<br>
-当前结论：已建立 source-only 本地索引、Context Pack v1.2、lexical/symbol/relation RRF、PostgreSQL 共享存储与原子 publisher，并完成正式 Zoekt lexical adapter 的真实镜像集成验证。整个索引链路不编译源码；下一步恢复现有问题集的自动评测，依据增量收益决定是否启用 vector/reranker，人工证据复核继续暂停。
+最后更新：2026-08-06<br>
+当前阶段：Phase 0B 全树结构化检索与 vector 决策（进行中）<br>
+当前结论：Linux 6.18.40 固定 scope 已完成 70,925 文件的 source-only 全树扫描和严格行范围评测。无向量 hybrid 的 File Recall@10 为 `0.7222`、Evidence Range Recall@10 为 `0.5926`、File MRR 为 `0.8500`、Range MRR 为 `0.6833`，四项均优于 FTS；下一步以此为冻结工程基线做 vector/reranker 消融，人工证据复核继续暂停。
 
 ## 维护规则
 
@@ -62,7 +62,7 @@
 - 已从候选集中初选 10 个覆盖宏、内存、构建、用户指针、驱动、模块和调度的问题，形成 `questions.first-batch.jsonl`。
 - 用户已确认第一批 10 个问题全部保留，`review_status` 已统一更新为 `accepted`。
 - 已初步标注 27 处 Linux 6.18.40 源码范围，共 18 个唯一证据文件；路径和行号自动校验结果为 0 个缺失、0 个越界。
-- 已运行第一批 ripgrep baseline：Evidence Recall@10 = `0.5000`（9/18），MRR = `0.3033`；3 题全部找回、3 题部分找回、4 题未找回。
+- 已在包含 `scripts/` 的固定范围重跑第一批 ripgrep baseline：Evidence Recall@10 = `0.5000`（9/18），MRR = `0.3583`；3 题全部找回、3 题部分找回、4 题未找回。
 - 已生成第一批评测报告，并确认高频调用点淹没定义、核心实现和权威文档是主要失败类型。
 
 ### 2.3 Phase 0B 已完成的工作项
@@ -119,6 +119,15 @@
 - 已实现 `ZoektClient` 与 `ZoektReadCatalog`：查询限定不可变 snapshot 内部仓库名，开启 BM25，严格拒绝越界 repository/版本，再按文件和行号映射回 SQLite/PostgreSQL 权威 chunk；只有 Zoekt 不可用时回退 FTS，trace 记录真实通道。
 - `kb-search`、`kb-retrieve`、`kb-context` 已支持 `AIKB_ZOEKT_URL`、`--zoekt-url` 和验收用 `--zoekt-required`；Context Pack 升级为 v1.2，允许 `lexical_zoekt`、`lexical_fts5` 和 `lexical_postgres_fts`。
 - GitHub Actions 使用固定官方预构建 Zoekt 镜像且传入 `-disable_ctags`，从 source-only fixture 索引并启动 JSON API；PostgreSQL 17 + pgvector、SQLite 和 Zoekt 共 29/29 测试通过，run 为 [`30753488893`](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30753488893)。
+- 已完成 Linux 6.18.40 全树冷扫描：70,925 文件、70,848 唯一 blob、3,970,532 chunk、5,125,759 occurrence、5,098,771 relation、126,783 condition，snapshot `snap_a162172858bee6eee189963a` 通过独立计数校验后激活。
+- 全树成功运行约 81 分钟，数据库约 12.64 GB，WAL 峰值约 11.92 GB，峰值工作集约 2.59 GB；全过程不编译 Linux、不执行仓库脚本。
+- 已把深层 AST walker 改为显式栈，把数百万待绑定关系移到磁盘临时表，并用 basename 索引消除 include 候选的“每条关系 × 全仓路径”扫描。
+- 已把 blob/analysis artifact 按 250 文件有界批次持久化；故障注入证明缓存可保留，而半成品 snapshot 不可见。
+- 已实现结构化自动评测 runner 和 Markdown 报告：同时计算 file 与 evidence range Recall/MRR，并输出 complete/partial/missed 逐题状态。
+- 全树 FTS 指标为 File Recall `0.5556`、Range Recall `0.2593`、File MRR `0.7000`、Range MRR `0.5167`；加入 symbol/relation RRF 后为 `0.7222`、`0.5926`、`0.8500`、`0.6833`，完整题由 0 增至 5。
+- 已修复全树关系召回的跨 JOIN OR 全扫，真实关系查询约 0.010～0.022 秒；已修复多行 macro occurrence 无法映射单行 chunk，`likely`、`container_of`、`EXPORT_SYMBOL` 等定义重新进入 definition-first 通道。
+- SQLite FTS 全树 10 题运行约 605 秒，确认只适合作为离线 baseline；评测 lexical cache 严格校验问题、查询、Top K 和 snapshot，只重算下游 hybrid 为 0.367 秒，为 vector/reranker 消融提供可重复输入。
+- 当前本地运行 36 项测试：31 项通过、5 项环境集成测试跳过；分析缓存、include 索引和报告生成提交已在 PostgreSQL/pgvector + Zoekt CI run [`31028642268`](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31028642268) 通过，最新检索修复待本轮提交后再次跑 CI。
 
 ## 3. 还未完成的计划
 
@@ -130,8 +139,8 @@
 
 | 优先级 | 未完成事项 | 下一动作 | 完成条件 |
 | --- | --- | --- | --- |
-| P0 | 恢复自动评测并形成可比较报告 | 让现有已保留问题自动跑 FTS 与 Zoekt/RRF，暂不要求人工复核 | 输出逐题证据、Evidence Recall@10、MRR、失败类型和可重复命令 |
-| P1 | 实验 vector 通道 | 在 pgvector schema 上接 embedding provider，与无向量结果做消融对比 | Evidence Recall/MRR 有可复现提升才保留模型，否则关闭通道 |
+| P0 | 实验 vector/reranker 通道 | 在当前 lexical cache 与 hybrid 基线上接 provider，做严格消融 | 四项 Recall/MRR 有可复现净增益且延迟/成本可接受才保留，否则关闭通道 |
+| P1 | 修复剩余高价值检索缺口 | 优先分析 vmalloc/kmalloc 文档、oldconfig 行范围和 `__user`/module 部分命中 | 不靠目录硬编码，新增规则由逐题证据和回归测试支撑 |
 | P1 | 扩大 source-only 规则覆盖 | 完善复杂 Kconfig/Kbuild 变量、更多语言 import 和注册模式 | 未解析/歧义统计可解释，并由真实问题决定规则优先级 |
 
 本地扫描和 PostgreSQL 共享存储的首条链路已经打通，但以下仍未完成：
@@ -170,11 +179,12 @@
 | 9 | 建立 PostgreSQL/pgvector schema 与 migration | Codex | provider boundary、15 表 metadata、Alembic、CI service | 已完成，GitHub Actions PostgreSQL 17 上 23/23 测试通过 |
 | 10 | 实现 PostgreSQL read/write adapter | Codex | Context Pack read、分批写入、计数校验、原子发布、回滚 | 已完成，GitHub Actions PostgreSQL 17 上 25/25 测试通过 |
 | 11 | 接入 Zoekt 正式 lexical adapter | Codex | immutable export、预构建 Zoekt index job、provider adapter、FTS fallback、live CI | 已完成，29/29 测试通过，run `30753488893` |
-| 12 | 恢复评测问题集 | Codex | 自动评测 runner、FTS/Zoekt/RRF 对比、失败分类；人工复核继续暂停 | 用现有真实问题量化 Phase 0B 收益并产生 vector 决策输入 |
+| 12 | 恢复评测问题集 | Codex | 自动评测 runner、FTS/RRF 对比、失败分类；人工复核继续暂停 | 已完成：hybrid Range Recall@10 `0.5926`、Range MRR `0.6833`，形成 vector 决策输入 |
+| 13 | 实验 vector/reranker | Codex | provider 边界、可缓存 embedding/score、与当前 hybrid 的消融报告 | 只有四项指标和实际问题均有可解释净增益才进入正式通道 |
 
 ### 现在立即要做的动作
 
-下一项开发工作是恢复现有问题集的自动评测：复用已保留的问题和 draft evidence，在不要求人工复核的前提下输出 FTS baseline、Zoekt + symbol/relation RRF 的逐题证据与汇总指标。评测结果用于决定 vector/embedding 是否值得进入正式通道；任何模型只有相对无向量方案取得可复现增益才保留。
+下一项开发工作是 vector/reranker 消融：复用同一 snapshot、问题集和经过严格校验的 lexical cache，以当前 hybrid 指标为无向量基线。先固定 provider/schema/缓存和失败回退，再评估模型；任何模型只有相对 File/Range Recall 与 MRR 取得可解释、可复现的净增益且延迟/资源可接受才保留。若没有增益，正式通道保持无向量，而不是为了符合预设架构强行启用模型。
 
 ## 相关文档
 
@@ -188,3 +198,5 @@
 - [本地混合检索 v1](hybrid-retrieval.md)
 - [PostgreSQL/pgvector schema v1](postgres-schema-v1.md)
 - [Zoekt source-only 索引与检索适配器](zoekt-adapter.md)
+- [Linux 6.18.40 全树 source-only 验证](full-tree-validation.md)
+- [结构化检索自动评测报告](../evals/reports/linux-6.18.40-structured.md)
