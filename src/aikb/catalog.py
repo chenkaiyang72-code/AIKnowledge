@@ -671,40 +671,84 @@ class Catalog:
             return []
         if top_k < 1 or top_k > 100:
             raise ValueError("top-k must be between 1 and 100")
-        predicates = [
-            f"ls.name IN ({','.join('?' for _ in ordered_names)})"
-        ]
-        parameters: list[Any] = list(ordered_names)
+        scope_predicates: list[str] = []
+        scope_parameters: list[Any] = []
         if snapshot_id:
-            predicates.append("s.id = ?")
-            parameters.append(snapshot_id)
+            scope_predicates.append("s.id = ?")
+            scope_parameters.append(snapshot_id)
         else:
-            predicates.append("s.state = 'active'")
+            scope_predicates.append("s.state = 'active'")
         if repository:
-            predicates.append("r.name = ?")
-            parameters.append(repository)
-        parameters.append(top_k * 10)
-        rows = self.connection.execute(
+            scope_predicates.append("r.name = ?")
+            scope_parameters.append(repository)
+        scope_rows = self.connection.execute(
             f"""
-            SELECT c.id AS chunk_id, f.blob_id, c.content_hash,
-                   r.name AS repository, s.id AS snapshot_id, s.revision,
-                   f.path, c.start_line, c.end_line, c.kind, c.symbol,
-                   c.generator, b.compressed_content,
-                   ls.name AS matched_name, so.role, so.start_line AS occurrence_line
-            FROM symbol_occurrence AS so
-            JOIN logical_symbol AS ls ON ls.id = so.logical_symbol_id
-            JOIN source_file AS f ON f.id = so.file_id
-            JOIN chunk AS c ON c.file_id = f.id
-                AND c.start_line <= so.start_line
-                AND c.end_line >= so.end_line
-            JOIN blob AS b ON b.id = f.blob_id
-            JOIN snapshot AS s ON s.id = so.snapshot_id
+            SELECT s.id AS snapshot_id, s.repository_id
+            FROM snapshot AS s
             JOIN repository AS r ON r.id = s.repository_id
-            WHERE {' AND '.join(predicates)}
-            LIMIT ?
+            WHERE {' AND '.join(scope_predicates)}
             """,
-            parameters,
+            scope_parameters,
         ).fetchall()
+        if not scope_rows:
+            return []
+        snapshot_ids = [row["snapshot_id"] for row in scope_rows]
+        repository_ids = list(
+            dict.fromkeys(row["repository_id"] for row in scope_rows)
+        )
+        snapshot_placeholders = ",".join("?" for _ in snapshot_ids)
+        repository_placeholders = ",".join("?" for _ in repository_ids)
+        per_name_limit = min(top_k * 3, 100)
+        rows: list[sqlite3.Row] = []
+        for name in ordered_names:
+            symbol_rows = self.connection.execute(
+                f"""
+                SELECT id
+                FROM logical_symbol INDEXED BY logical_symbol_repository_name
+                WHERE repository_id IN ({repository_placeholders})
+                  AND name = ?
+                """,
+                [*repository_ids, name],
+            ).fetchall()
+            if not symbol_rows:
+                continue
+            symbol_ids = [row["id"] for row in symbol_rows]
+            symbol_placeholders = ",".join("?" for _ in symbol_ids)
+            rows.extend(
+                self.connection.execute(
+                    f"""
+                    SELECT c.id AS chunk_id, f.blob_id, c.content_hash,
+                           r.name AS repository, s.id AS snapshot_id, s.revision,
+                           f.path, c.start_line, c.end_line, c.kind, c.symbol,
+                           c.generator, b.compressed_content,
+                           ls.name AS matched_name, so.role,
+                           so.start_line AS occurrence_line
+                    FROM symbol_occurrence AS so
+                        INDEXED BY symbol_occurrence_snapshot_symbol
+                    JOIN logical_symbol AS ls ON ls.id = so.logical_symbol_id
+                    JOIN source_file AS f ON f.id = so.file_id
+                    JOIN chunk AS c ON c.file_id = f.id
+                        AND c.start_line <= so.end_line
+                        AND c.end_line >= so.start_line
+                    JOIN blob AS b ON b.id = f.blob_id
+                    JOIN snapshot AS s ON s.id = so.snapshot_id
+                    JOIN repository AS r ON r.id = s.repository_id
+                    WHERE so.snapshot_id IN ({snapshot_placeholders})
+                      AND so.logical_symbol_id IN ({symbol_placeholders})
+                    ORDER BY
+                        CASE so.role
+                            WHEN 'definition' THEN 0
+                            WHEN 'declaration' THEN 1
+                            ELSE 2
+                        END,
+                        f.path,
+                        so.start_line,
+                        c.id
+                    LIMIT ?
+                    """,
+                    [*snapshot_ids, *symbol_ids, per_name_limit],
+                ).fetchall()
+            )
         name_order = {name: index for index, name in enumerate(ordered_names)}
         sorted_rows = sorted(
             rows,
@@ -740,23 +784,66 @@ class Catalog:
         if top_k < 1 or top_k > 100:
             raise ValueError("top-k must be between 1 and 100")
         placeholders = ",".join("?" for _ in ordered_names)
-        predicates = [
-            f"(source_symbol.name IN ({placeholders}) "
-            f"OR target_symbol.name IN ({placeholders}) "
-            f"OR rel.target_text IN ({placeholders}))"
-        ]
-        parameters: list[Any] = ordered_names * 3
+        snapshot_predicates: list[str] = []
+        snapshot_parameters: list[Any] = []
         if snapshot_id:
-            predicates.append("s.id = ?")
-            parameters.append(snapshot_id)
+            snapshot_predicates.append("s.id = ?")
+            snapshot_parameters.append(snapshot_id)
         else:
-            predicates.append("s.state = 'active'")
+            snapshot_predicates.append("s.state = 'active'")
         if repository:
-            predicates.append("r.name = ?")
-            parameters.append(repository)
-        parameters.append(top_k * 10)
+            snapshot_predicates.append("r.name = ?")
+            snapshot_parameters.append(repository)
+        branch_limit = top_k * 10
+        parameters: list[Any] = [
+            *snapshot_parameters,
+            *ordered_names,
+            branch_limit,
+            branch_limit,
+            *ordered_names,
+            branch_limit,
+            top_k * 30,
+        ]
         rows = self.connection.execute(
             f"""
+            WITH candidate_snapshot(id, repository_id) AS (
+                SELECT s.id, s.repository_id
+                FROM snapshot AS s
+                JOIN repository AS r ON r.id = s.repository_id
+                WHERE {' AND '.join(snapshot_predicates)}
+            ),
+            matched_symbol(id) AS (
+                SELECT ls.id
+                FROM logical_symbol AS ls
+                JOIN candidate_snapshot AS scope
+                    ON scope.repository_id = ls.repository_id
+                WHERE ls.name IN ({placeholders})
+            ),
+            candidate_relation(id) AS (
+                SELECT id FROM (
+                    SELECT rel.id
+                    FROM relation AS rel
+                    WHERE rel.snapshot_id IN (SELECT id FROM candidate_snapshot)
+                      AND rel.source_symbol_id IN (SELECT id FROM matched_symbol)
+                    LIMIT ?
+                )
+                UNION
+                SELECT id FROM (
+                    SELECT rel.id
+                    FROM relation AS rel
+                    WHERE rel.snapshot_id IN (SELECT id FROM candidate_snapshot)
+                      AND rel.target_symbol_id IN (SELECT id FROM matched_symbol)
+                    LIMIT ?
+                )
+                UNION
+                SELECT id FROM (
+                    SELECT rel.id
+                    FROM relation AS rel
+                    WHERE rel.snapshot_id IN (SELECT id FROM candidate_snapshot)
+                      AND rel.target_text IN ({placeholders})
+                    LIMIT ?
+                )
+            )
             SELECT c.id AS chunk_id, f.blob_id, c.content_hash,
                    r.name AS repository, s.id AS snapshot_id, s.revision,
                    f.path, c.start_line, c.end_line, c.kind, c.symbol,
@@ -765,11 +852,12 @@ class Catalog:
                    target_symbol.name AS target_name,
                    rel.target_text, rel.start_line AS relation_line,
                    rel.confidence
-            FROM relation AS rel
+            FROM candidate_relation AS candidate
+            JOIN relation AS rel ON rel.id = candidate.id
             JOIN source_file AS f ON f.id = rel.source_file_id
             JOIN chunk AS c ON c.file_id = f.id
-                AND c.start_line <= rel.start_line
-                AND c.end_line >= rel.end_line
+                AND c.start_line <= rel.end_line
+                AND c.end_line >= rel.start_line
             JOIN blob AS b ON b.id = f.blob_id
             JOIN snapshot AS s ON s.id = rel.snapshot_id
             JOIN repository AS r ON r.id = s.repository_id
@@ -777,7 +865,6 @@ class Catalog:
                 ON source_symbol.id = rel.source_symbol_id
             LEFT JOIN logical_symbol AS target_symbol
                 ON target_symbol.id = rel.target_symbol_id
-            WHERE {' AND '.join(predicates)}
             LIMIT ?
             """,
             parameters,

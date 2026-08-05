@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from aikb.catalog import SearchHit
-from aikb.storage import LexicalChannel, ReadCatalog
+from aikb.storage import LexicalChannel, LexicalSearchResult, ReadCatalog
 
 
 RetrievalChannel = LexicalChannel | Literal["symbol_exact", "relation_source"]
@@ -63,6 +63,7 @@ def retrieve_hybrid(
     top_k: int = 20,
     repository: str | None = None,
     snapshot_id: str | None = None,
+    precomputed_lexical: LexicalSearchResult | None = None,
 ) -> RetrievalResult:
     normalized_query = " ".join(query.split())
     if not normalized_query:
@@ -71,12 +72,14 @@ def retrieve_hybrid(
         raise ValueError("top-k must be between 1 and 100")
 
     identifiers = extract_identifier_terms(normalized_query)
-    lexical_result = catalog.search_lexical(
-        normalized_query,
-        top_k=top_k,
-        repository=repository,
-        snapshot_id=snapshot_id,
-    )
+    lexical_result = precomputed_lexical
+    if lexical_result is None:
+        lexical_result = catalog.search_lexical(
+            normalized_query,
+            top_k=top_k,
+            repository=repository,
+            snapshot_id=snapshot_id,
+        )
     channel_hits: dict[RetrievalChannel, list[SearchHit]] = {
         lexical_result.channel: list(lexical_result.hits),
         "symbol_exact": catalog.search_symbol_chunks(

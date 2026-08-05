@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 from aikb.catalog import Catalog, SearchHit
 from aikb.retrieval import HybridHit, retrieve_hybrid
-from aikb.storage import ReadCatalog
+from aikb.storage import LexicalSearchResult, ReadCatalog
 from aikb.zoekt import ZoektClient, ZoektReadCatalog
 
 
@@ -348,6 +348,102 @@ def _serialize_hybrid_hit(item: HybridHit) -> dict[str, Any]:
     }
 
 
+def load_structured_lexical_cache(
+    path: Path,
+    questions: list[dict[str, Any]],
+    top_k: int,
+    resolved_snapshots: list[dict[str, Any]],
+) -> tuple[dict[str, LexicalSearchResult], str]:
+    raw = path.read_bytes()
+    report = json.loads(raw.decode("utf-8"))
+    if not isinstance(report, dict):
+        raise ValueError("lexical cache must contain a JSON object")
+    if report.get("schema_version") != 2:
+        raise ValueError("lexical cache must be a structured report with schema_version 2")
+    if report.get("top_k") != top_k:
+        raise ValueError("lexical cache top_k does not match this evaluation")
+    expected_snapshots = {
+        item["snapshot_id"] for item in resolved_snapshots
+    }
+    cached_snapshots = {
+        item["snapshot_id"]
+        for item in report.get("scope", {}).get("resolved_snapshots", [])
+    }
+    if cached_snapshots != expected_snapshots:
+        raise ValueError("lexical cache snapshots do not match this evaluation")
+    lexical_report = report.get("retrievers", {}).get("lexical", {})
+    channel = lexical_report.get("name")
+    if channel not in {
+        "lexical_fts5",
+        "lexical_postgres_fts",
+        "lexical_zoekt",
+    }:
+        raise ValueError("lexical cache has an unsupported provider")
+    cached_questions = {
+        item["id"]: item for item in lexical_report.get("questions", [])
+    }
+    if set(cached_questions) != {item["id"] for item in questions}:
+        raise ValueError("lexical cache question IDs do not match this evaluation")
+
+    cache: dict[str, LexicalSearchResult] = {}
+    for question in questions:
+        cached = cached_questions[question["id"]]
+        query = " ".join(question["query_terms"])
+        if cached.get("query") != query:
+            raise ValueError(
+                f"lexical cache query does not match question {question['id']}"
+            )
+        results = cached.get("results", [])
+        if len(results) > top_k:
+            raise ValueError(
+                f"lexical cache exceeds top_k for question {question['id']}"
+            )
+        hits: list[SearchHit] = []
+        for item in results:
+            if item["snapshot_id"] not in expected_snapshots:
+                raise ValueError(
+                    f"lexical cache result escapes scope for question {question['id']}"
+                )
+            expected_citation = (
+                f"{item['repository']}@{item['revision']}:"
+                f"{item['path']}:{item['start_line']}-{item['end_line']}"
+            )
+            if item.get("citation") != expected_citation:
+                raise ValueError(
+                    f"lexical cache citation is invalid for question {question['id']}"
+                )
+            if not item["content_truncated"] and hashlib.sha256(
+                item["content"].encode("utf-8")
+            ).hexdigest() != item["content_hash"]:
+                raise ValueError(
+                    f"lexical cache content hash is invalid for question {question['id']}"
+                )
+            hits.append(
+                SearchHit(
+                    chunk_id=item["chunk_id"],
+                    blob_id=item["blob_id"],
+                    content_hash=item["content_hash"],
+                    repository=item["repository"],
+                    snapshot_id=item["snapshot_id"],
+                    revision=item["revision"],
+                    path=item["path"],
+                    start_line=item["start_line"],
+                    end_line=item["end_line"],
+                    kind=item["kind"],
+                    symbol=item.get("symbol"),
+                    generator=item["generator"],
+                    rank=item["rank"],
+                    content=item["content"],
+                    content_truncated=item["content_truncated"],
+                )
+            )
+        cache[question["id"]] = LexicalSearchResult(
+            channel=channel,
+            hits=tuple(hits),
+        )
+    return cache, hashlib.sha256(raw).hexdigest()
+
+
 def _ranges_overlap(
     expected_start: int,
     expected_end: int,
@@ -487,6 +583,8 @@ def run_structured_evaluation(
     top_k: int,
     repository: str | None = None,
     snapshot_id: str | None = None,
+    lexical_cache: dict[str, LexicalSearchResult] | None = None,
+    lexical_cache_digest: str | None = None,
 ) -> dict[str, Any]:
     snapshots = catalog.resolve_snapshots(repository, snapshot_id)
     lexical_questions: list[dict[str, Any]] = []
@@ -495,12 +593,15 @@ def run_structured_evaluation(
 
     for question in questions:
         query = " ".join(question["query_terms"])
-        lexical = catalog.search_lexical(
-            query,
-            top_k=top_k,
-            repository=repository,
-            snapshot_id=snapshot_id,
-        )
+        if lexical_cache is None:
+            lexical = catalog.search_lexical(
+                query,
+                top_k=top_k,
+                repository=repository,
+                snapshot_id=snapshot_id,
+            )
+        else:
+            lexical = lexical_cache[question["id"]]
         lexical_channels.add(lexical.channel)
         lexical_questions.append(
             {
@@ -516,6 +617,7 @@ def run_structured_evaluation(
             top_k=top_k,
             repository=repository,
             snapshot_id=snapshot_id,
+            precomputed_lexical=lexical,
         )
         hybrid_questions.append(
             {
@@ -546,6 +648,8 @@ def run_structured_evaluation(
         },
         "top_k": top_k,
         "query_source": "query_terms",
+        "lexical_reused": lexical_cache is not None,
+        "lexical_cache_digest": lexical_cache_digest,
         "retrievers": {
             "lexical": {
                 "name": lexical_channel,
@@ -588,6 +692,11 @@ def render_structured_markdown(report: dict[str, Any]) -> str:
         f"- 标注证据范围数：{report['dataset']['required_evidence_ranges']}",
         f"- Top K：{top_k}",
         f"- 查询来源：`{report['query_source']}`",
+        (
+            f"- Lexical 缓存：复用 `{report['lexical_cache_digest']}`"
+            if report.get("lexical_reused")
+            else "- Lexical 缓存：未复用"
+        ),
         f"- Snapshot：{snapshot_text}",
         "- 证据状态：沿用数据集现有标注；未经过人工复核的 draft 不能视为冻结黄金集。",
         "",
@@ -690,6 +799,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="optionally write a deterministic Markdown summary",
     )
     structured_parser.add_argument("--top-k", type=int, default=10)
+    structured_parser.add_argument(
+        "--reuse-lexical-from",
+        type=Path,
+        help="reuse validated lexical results from a prior structured JSON report",
+    )
     structured_parser.add_argument("--repository")
     structured_parser.add_argument("--snapshot-id")
     structured_parser.add_argument(
@@ -732,10 +846,27 @@ def main(argv: list[str] | None = None) -> int:
                         "--zoekt-required needs --zoekt-url or AIKB_ZOEKT_URL"
                     )
                 if zoekt_url:
+                    if args.reuse_lexical_from:
+                        raise ValueError(
+                            "--reuse-lexical-from cannot be combined with Zoekt options"
+                        )
                     read_catalog = ZoektReadCatalog(
                         catalog,
                         ZoektClient(zoekt_url),
                         fallback_on_unavailable=not args.zoekt_required,
+                    )
+                lexical_cache = None
+                lexical_cache_digest = None
+                if args.reuse_lexical_from:
+                    lexical_cache, lexical_cache_digest = (
+                        load_structured_lexical_cache(
+                            args.reuse_lexical_from,
+                            questions,
+                            args.top_k,
+                            read_catalog.resolve_snapshots(
+                                args.repository, args.snapshot_id
+                            ),
+                        )
                     )
                 report = run_structured_evaluation(
                     read_catalog,
@@ -743,6 +874,8 @@ def main(argv: list[str] | None = None) -> int:
                     args.top_k,
                     repository=args.repository,
                     snapshot_id=args.snapshot_id,
+                    lexical_cache=lexical_cache,
+                    lexical_cache_digest=lexical_cache_digest,
                 )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("w", encoding="utf-8", newline="\n") as stream:

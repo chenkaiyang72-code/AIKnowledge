@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -11,6 +12,7 @@ from aikb.catalog import Catalog
 from aikb.evaluation import (
     evaluate_results,
     evaluate_structured_results,
+    load_structured_lexical_cache,
     load_questions,
     rank_question,
     render_structured_markdown,
@@ -149,14 +151,62 @@ class EvaluationTests(unittest.TestCase):
             with Catalog(root / "catalog.db") as catalog:
                 catalog.initialize()
                 snapshot = ingest_source(catalog, scope, source)
-                report = run_structured_evaluation(
+                with patch.object(
                     catalog,
-                    questions,
-                    top_k=10,
-                    snapshot_id=snapshot["id"],
+                    "search_lexical",
+                    wraps=catalog.search_lexical,
+                ) as lexical_search:
+                    report = run_structured_evaluation(
+                        catalog,
+                        questions,
+                        top_k=10,
+                        snapshot_id=snapshot["id"],
+                    )
+                    self.assertEqual(lexical_search.call_count, 1)
+                cache_path = root / "structured-cache.json"
+                cache_path.write_text(
+                    json.dumps(report, ensure_ascii=False),
+                    encoding="utf-8",
                 )
+                lexical_cache, cache_digest = load_structured_lexical_cache(
+                    cache_path,
+                    questions,
+                    10,
+                    catalog.resolve_snapshots(snapshot_id=snapshot["id"]),
+                )
+                with patch.object(
+                    catalog,
+                    "search_lexical",
+                    wraps=catalog.search_lexical,
+                ) as cached_lexical_search:
+                    cached_report = run_structured_evaluation(
+                        catalog,
+                        questions,
+                        top_k=10,
+                        snapshot_id=snapshot["id"],
+                        lexical_cache=lexical_cache,
+                        lexical_cache_digest=cache_digest,
+                    )
+                    self.assertEqual(cached_lexical_search.call_count, 0)
+                tampered = json.loads(json.dumps(report))
+                tampered["retrievers"]["lexical"]["questions"][0]["results"][0][
+                    "citation"
+                ] = "tampered"
+                cache_path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "citation is invalid"):
+                    load_structured_lexical_cache(
+                        cache_path,
+                        questions,
+                        10,
+                        catalog.resolve_snapshots(snapshot_id=snapshot["id"]),
+                    )
 
         self.assertEqual(2, report["schema_version"])
+        self.assertTrue(cached_report["lexical_reused"])
+        self.assertEqual(
+            report["retrievers"]["lexical"]["metrics"],
+            cached_report["retrievers"]["lexical"]["metrics"],
+        )
         self.assertEqual(
             "lexical_fts5", report["retrievers"]["lexical"]["name"]
         )

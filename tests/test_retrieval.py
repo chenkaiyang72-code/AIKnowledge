@@ -28,6 +28,11 @@ class HybridRetrievalTests(unittest.TestCase):
             "int second_caller(void) { return exact_target(); }\n",
             encoding="utf-8",
         )
+        (self.source / "include" / "demo.h").write_text(
+            "#define TWO_LINE(value) \\\n"
+            "\t((value) + 1)\n",
+            encoding="utf-8",
+        )
         self.scope = {
             "scope_id": "retrieval-test",
             "source": {
@@ -38,7 +43,7 @@ class HybridRetrievalTests(unittest.TestCase):
                 "archive_sha256": "c" * 64,
                 "git_commit": None,
             },
-            "include_roots": ["kernel"],
+            "include_roots": ["include", "kernel"],
             "exclude_globs": [],
             "index_policy": {
                 "mode": "source_only",
@@ -90,6 +95,17 @@ class HybridRetrievalTests(unittest.TestCase):
         self.assertEqual(terms[0], "same")
         self.assertEqual(len(terms), 16)
         self.assertEqual(len(set(terms)), len(terms))
+
+    def test_multiline_macro_occurrence_maps_to_overlapping_chunk(self) -> None:
+        with Catalog(self.database) as catalog:
+            catalog.initialize()
+            ingest_source(catalog, self.scope, self.source)
+            hits = catalog.search_symbol_chunks(["TWO_LINE"], top_k=10)
+
+        self.assertGreaterEqual(len(hits), 1)
+        self.assertEqual(hits[0].path, "include/demo.h")
+        self.assertLessEqual(hits[0].start_line, 1)
+        self.assertGreaterEqual(hits[0].end_line, 1)
 
 
 if __name__ == "__main__":
