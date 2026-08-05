@@ -25,10 +25,14 @@ semantic = [
   "torch==2.13.0",
   "transformers==5.14.1",
 ]
+mcp = [
+  "mcp==2.0.0",
+]
 
 [project.scripts]
 aikb = "aikb.cli:main"
 aikb-eval = "aikb.evaluation:main"
+aikb-mcp = "aikb.mcp_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

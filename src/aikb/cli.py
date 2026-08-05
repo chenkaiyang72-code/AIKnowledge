@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from aikb import evaluation, knowledge_cli, semantic_evaluation
+from aikb import evaluation, knowledge_cli, mcp_cli, semantic_evaluation
 
 
 EVALUATION_COMMANDS = {"inspect", "baseline", "structured"}
@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
             "  kb-solution-context  build a cross-repository Context Pack\n\n"
             "  kb-publish-postgres  atomically publish a snapshot to PostgreSQL\n\n"
             "  kb-zoekt-export  materialize an immutable snapshot for Zoekt\n\n"
+            "MCP command:\n"
+            "  mcp-serve      run the read-only stdio or Streamable HTTP server\n\n"
             "Run 'python -m aikb <command> --help' for command options."
         )
         return 0
@@ -58,5 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         return semantic_evaluation.main(arguments[1:])
     if command in KNOWLEDGE_COMMANDS:
         return knowledge_cli.main(arguments)
+    if command == "mcp-serve":
+        return mcp_cli.main(arguments)
     print(f"error: unknown command {command!r}; use --help", file=sys.stderr)
     return 2

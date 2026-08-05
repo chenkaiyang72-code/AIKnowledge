@@ -173,7 +173,7 @@
 
 | ID | 工作 | 产出 |
 | --- | --- | --- |
-| MCP-001 | 锁定 `mcp==1.28.0` 并建立 v2/客户端兼容测试 | dependency lock + tests |
+| MCP-001 | 锁定已 GA 的 `mcp==2.0.0` 并建立新旧协议/客户端兼容测试 | dependency lock + tests |
 | MCP-002 | 实现 `scope.resolve` | read tool |
 | MCP-003 | 实现 `context.search` 和分页/大小限制 | read tool |
 | MCP-004 | 实现 `context.get` 和 token budget | read tool |
@@ -182,6 +182,19 @@
 | INT-001 | 完成 Cursor 配置和端到端测试 | integration guide |
 | INT-002 | 完成 Claude Code 配置和端到端测试 | integration guide |
 | OBS-001 | 为 MCP、检索、索引增加 trace_id 和核心指标 | OpenTelemetry traces |
+
+### 当前实现状态（2026-08-06）
+
+| ID | 状态 | 已实现内容 | 仍需推进 |
+| --- | --- | --- | --- |
+| MCP-001 | 完成 | 固定 GA `mcp==2.0.0`；内存 client、stdio 子进程、stateless HTTP 均有协议测试 | 后续 SDK 升级继续走兼容门槛 |
+| MCP-002 | 完成 | `aikb_scope_resolve` 支持 repository 与固定 solution、PoC partial visibility | Phase 1B 从 principal/RLS 获取权限集合 |
+| MCP-003 | 完成 | `aikb_context_search` 返回严格 Context Pack v1.3，协议 schema 限制 query/条数/token/symbol/relation | Cursor/Claude agent 实际回答交互验证 |
+| MCP-004 | 完成 | `aikb_context_get` 按固定 snapshot/path/line 回读权威 chunk，拒绝绝对路径和 `..` | PostgreSQL 常驻服务性能验证 |
+| MCP-005 | 本机完成 | stdio 与 loopback Stateless Streamable HTTP；未认证远程绑定被强制拒绝 | Phase 1B 认证完成后开放团队 HTTP |
+| INT-001 | 待人工验收 | 已提供 Cursor `.cursor/mcp.json` 配置 | 在实际 Cursor 中连接并记录兼容结果 |
+| INT-002 | 部分完成 | Claude Code `2.1.222` 隔离配置已真实启动 stdio server，健康状态 `Connected` | 在 Claude agent 会话中实际调用工具并核对 Context Pack |
+| OBS-001 | 部分完成 | Context Pack 已含确定性 trace ID；100 次协议调用稳定 | OpenTelemetry latency/error spans 尚未接入 |
 
 ### 验收
 

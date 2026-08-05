@@ -347,8 +347,8 @@ ACL 在每一路召回前和最终输出前都执行。不得先搜索所有私�
 
 **具体版本决策**
 
-- 首个实现锁定 `mcp==1.28.0`。截至本蓝图更新时，官方 release 页面最新 v2 仍是 `2.0.0rc1`，不能把候选版作为团队 MVP 基线。
-- 创建 MCP v2 compatibility test 分支；等 `2.0.0` 正式 tag 发布且 Cursor、Claude Code、VS Code/Copilot 三类客户端通过互操作测试后再迁移。
+- 首个实现锁定 `mcp==2.0.0`。该版本已于 2026-07-28 正式 GA；内存、stdio 和 Stateless Streamable HTTP 协议回归均已通过，Claude Code 真实 stdio 连接已验证。
+- 后续 SDK 升级继续通过协议回归和 Cursor、Claude Code、VS Code/Copilot 客户端兼容矩阵，不在未验收时自动漂移版本。
 - 使用 stateless Streamable HTTP；反向代理负责 TLS 和请求体限制。
 
 **第一版公开工具**
@@ -593,7 +593,7 @@ deploy/               -> C2/C4/C6/C12
 | Reranker | 先测 Qwen3-Reranker-0.6B | P95/收益不达标 |
 | 图数据库 | 暂不使用 | PostgreSQL 图遍历成为瓶颈 |
 | 通用 RAG 框架 | 核心检索不使用 | 出现可证明减少复杂度且不隐藏 ACL/citation 的方案 |
-| MCP | 首版固定 `mcp==1.28.0` | v2 GA tag + 三类客户端兼容测试通过 |
+| MCP | 首版固定 `mcp==2.0.0` | 新 GA tag + 内存/stdio/HTTP 与三类客户端兼容测试通过 |
 | 工作流 | Dramatiq + Redis + outbox | 需要跨天补偿和复杂长事务 |
 | 身份 | 企业 OIDC；无 IdP 时 Keycloak | 企业平台要求变化 |
 | 部署 | Docker Compose | 需要 HA、多节点或隔离 worker 池 |
@@ -613,5 +613,5 @@ deploy/               -> C2/C4/C6/C12
 - Zoekt 支持单仓/多仓代码搜索、trigram 索引、符号排序信号以及 JSON/gRPC API：[Zoekt README](https://github.com/sourcegraph/zoekt/blob/main/README.md)
 - SCIP/scip-clang 保留为调研对照；scip-clang 对 compilation database 的依赖正是首版不采用它的原因。
 - Qwen3 Embedding/Reranker 提供 0.6B～8B 模型，覆盖多语言与代码检索；0.6B embedding 为 1024 维：[Qwen3-Embedding](https://github.com/QwenLM/Qwen3-Embedding)
-- MCP Python SDK release 页面截至更新时将 `2.0.0rc1` 标为 pre-release，稳定 v2 迁移应等待正式版本和兼容验证：[MCP Python SDK releases](https://github.com/modelcontextprotocol/python-sdk/releases)
+- MCP Python SDK `2.0.0` 已正式发布，v2 迁移采用固定版本并保留兼容验证门槛：[MCP Python SDK v2.0.0](https://github.com/modelcontextprotocol/python-sdk/releases/tag/v2.0.0)
 - pgvector 支持 HNSW、混合搜索和多租户分区，但近似索引过滤会影响召回：[pgvector](https://github.com/pgvector/pgvector)

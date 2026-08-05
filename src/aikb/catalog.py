@@ -327,17 +327,29 @@ class Catalog:
     keeping the first ingest experiment runnable without external services.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, read_only: bool = False):
         self.path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(path)
+        self.read_only = read_only
+        if read_only:
+            if not path.is_file():
+                raise FileNotFoundError(f"catalog does not exist: {path}")
+            self.connection = sqlite3.connect(
+                f"{path.resolve().as_uri()}?mode=ro&immutable=1",
+                uri=True,
+            )
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.connection = sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
-        self.connection.execute("PRAGMA journal_mode = WAL")
-        self.connection.execute("PRAGMA synchronous = NORMAL")
-        # Full-repository scans stage unresolved relations in a temporary
-        # table. Keep it disk-backed across SQLite build configurations.
-        self.connection.execute("PRAGMA temp_store = FILE")
+        if read_only:
+            self.connection.execute("PRAGMA query_only = ON")
+        else:
+            self.connection.execute("PRAGMA journal_mode = WAL")
+            self.connection.execute("PRAGMA synchronous = NORMAL")
+            # Full-repository scans stage unresolved relations in a temporary
+            # table. Keep it disk-backed across SQLite build configurations.
+            self.connection.execute("PRAGMA temp_store = FILE")
 
     def __enter__(self) -> Catalog:
         return self
@@ -349,6 +361,8 @@ class Catalog:
         self.connection.close()
 
     def initialize(self) -> None:
+        if self.read_only:
+            raise RuntimeError("cannot initialize or migrate a read-only catalog")
         self.connection.executescript(SCHEMA_SQL)
         row = self.connection.execute(
             "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
@@ -380,6 +394,23 @@ class Catalog:
                 raise RuntimeError(
                     f"unsupported catalog schema {current_version}; expected {SCHEMA_VERSION}"
                 )
+
+    def validate_schema(self) -> None:
+        """Validate a pre-existing catalog without creating or migrating it."""
+
+        try:
+            row = self.connection.execute(
+                "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
+            ).fetchone()
+        except sqlite3.OperationalError as error:
+            raise RuntimeError("catalog schema is not initialized") from error
+        if row is None:
+            raise RuntimeError("catalog schema version is missing")
+        current_version = int(row["value"])
+        if current_version != SCHEMA_VERSION:
+            raise RuntimeError(
+                f"unsupported catalog schema {current_version}; expected {SCHEMA_VERSION}"
+            )
 
     def _migrate_v1_to_v2(self) -> None:
         columns = {

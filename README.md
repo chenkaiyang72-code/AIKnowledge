@@ -8,7 +8,7 @@
 
 ## 当前阶段
 
-项目已完成 Phase 0C 跨仓 PoC 的本地工程验收，正在进入只读 MCP 阶段；真实问题集已保留，按当前决定暂缓人工复核：
+项目已完成 Phase 0C 跨仓 PoC 与 Phase 1A 只读 MCP 的本地工程验收，Claude Code 真实 stdio 客户端已连接成功；下一步是 Cursor UI 验收与 Phase 1B 身份权限边界。真实问题集已保留，按当前决定暂缓人工复核：
 
 - [项目总体设计](docs/architecture.md)
 - [技术蓝图：架构、技术与开源组件映射](docs/technical-blueprint.md)
@@ -25,6 +25,8 @@
 - [Qwen3 语义候选重排消融](docs/semantic-ablation.md)
 - [ADR-0002：语义重排与全量向量决策](docs/decisions/0002-semantic-candidate-reranking.md)
 - [跨仓 solution snapshot、检索与部分可见性](docs/cross-repo-solution.md)
+- [只读 MCP：工具、stdio/HTTP 与客户端配置](docs/mcp-read-server.md)
+- [ADR-0003：采用 MCP v2 只读接入](docs/decisions/0003-mcp-v2-read-only.md)
 
 首版技术路线：Python 模块化单体与独立 worker，使用 PostgreSQL/pgvector 保存元数据和向量，使用 Tree-sitter、源码标识符/关系提取器和 Zoekt 建立无需编译的代码索引，并通过只读 MCP 网关向不同 AI 客户端提供带版本和引用的 Context Pack。
 
@@ -68,6 +70,26 @@ python -m aikb kb-solution-context `
 ```
 
 跨仓 Context Pack 对每个可见的固定 snapshot 分仓检索并公平合并，所有 evidence 保留 repository/revision/path/lines；能匹配的跨仓调用候选以 `source_inferred` link 返回。PoC 的 `--allow-repository` 用于验证部分可见性，生产权限仍将在 Phase 1B 由身份和 RLS 强制。
+
+只读 MCP 使用已 GA 的官方 SDK `mcp==2.0.0`，公开 scope resolve、context search、context get 三个工具：
+
+```powershell
+python -m pip install -e ".[mcp]"
+
+# Cursor/Claude Code 本地进程使用 stdio
+python -m aikb mcp-serve `
+  --db .aikb/catalog.db `
+  --transport stdio
+
+# 本机协议调试可使用 stateless Streamable HTTP
+python -m aikb mcp-serve `
+  --db .aikb/catalog.db `
+  --transport streamable-http `
+  --host 127.0.0.1 `
+  --port 8000
+```
+
+未认证 HTTP 被强制限制在 loopback；远程团队服务必须等 OIDC/OAuth、token audience、repository ACL 与 PostgreSQL RLS 完成后开放。Cursor 与 Claude Code 的完整配置见[MCP 运行文档](docs/mcp-read-server.md)。
 
 PostgreSQL schema 和 migration 可选安装：
 

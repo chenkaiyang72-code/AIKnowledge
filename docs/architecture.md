@@ -368,7 +368,7 @@ MCP 上下文模式只能可靠记录检索 trace，通常看不到客户端最�
 | 范围 | MVP 选择 | 原因 | 后续升级条件 |
 | --- | --- | --- | --- |
 | 后端 | Python 3.12 + FastAPI | AI/解析生态成熟，迭代快 | CPU 热点再用 Go/Rust 拆分 |
-| MCP | 官方 MCP Python SDK `mcp==1.28.0` + Streamable HTTP | 锁定已发布稳定线，避免 pre-release 协议变化影响客户端 | v2 GA tag 发布且 Cursor、Claude、VS Code 兼容测试通过后升级 |
+| MCP | 官方 MCP Python SDK `mcp==2.0.0` + stdio/Stateless Streamable HTTP | v2 已于 2026-07-28 GA，并兼容旧客户端；新实现不再建立在维护线 v1 | 新 GA 版本先通过协议、Cursor 与 Claude Code 兼容矩阵再升级 |
 | 主数据库 | PostgreSQL 18 当前 minor | 事务、RLS、FTS、JSON、关系表统一 | 明确瓶颈后再拆；17 仍可作为兼容下限 |
 | 向量检索 | pgvector + 安全域分区 | 降低组件数，支持 HNSW 和混合检索 | 千万级 chunk 或独立扩缩容时评估 Qdrant |
 | 语义模型候选 | Qwen3-Embedding-0.6B | 已验证可本地部署并覆盖代码/多语言；先对 Top-100 hybrid 候选重排 | provider/cache 已保留；黄金集达标前不启用全量向量召回，暂不增加独立 reranker 模型 |
@@ -383,7 +383,7 @@ MCP 上下文模式只能可靠记录检索 trace，通常看不到客户端最�
 | 可观测性 | OpenTelemetry + Prometheus/Grafana | 统一追踪检索和索引质量 | 从第一版保留 trace_id |
 | 部署 | Docker Compose | 单机可快速验证 | 多团队、高可用后迁移 Kubernetes |
 
-Embedding、reranker 和生成模型通过 provider interface 配置，不写死供应商。首轮 Qwen3-Embedding-0.6B 有界候选消融取得 Recall/MRR 净增益，已保留 provider、内容寻址 cache 和离线评测；由于问题仍未形成黄金集且全量索引成本高，默认 Context Pack 不启用 semantic，也不增加 Qwen3-Reranker。模型更换时通过 `provider + model + revision + weights hash + dimension + max length + instruction/template` 分隔缓存和并行重建索引，禁止原地混用不同 embedding。首版依赖显式锁定 `mcp==1.28.0`；只有 MCP v2 发布 GA tag 且 Cursor、Claude、VS Code 兼容矩阵验证通过后才升级。
+Embedding、reranker 和生成模型通过 provider interface 配置，不写死供应商。首轮 Qwen3-Embedding-0.6B 有界候选消融取得 Recall/MRR 净增益，已保留 provider、内容寻址 cache 和离线评测；由于问题仍未形成黄金集且全量索引成本高，默认 Context Pack 不启用 semantic，也不增加 Qwen3-Reranker。模型更换时通过 `provider + model + revision + weights hash + dimension + max length + instruction/template` 分隔缓存和并行重建索引，禁止原地混用不同 embedding。MCP v2 已正式 GA，首版依赖显式锁定 `mcp==2.0.0`，协议升级仍需经过内存、stdio、HTTP 与实际客户端兼容矩阵。
 
 ## 11. 可复用的开源项目
 
@@ -395,7 +395,7 @@ Embedding、reranker 和生成模型通过 provider interface 配置，不写死
 | [Zoekt](https://github.com/sourcegraph/zoekt) | C4 Lexical Search、C7 Retrieval | 建正式 trigram 代码索引，通过内部 JSON/gRPC adapter 查询 | Phase 0B 直接依赖；不承担权限和知识治理 |
 | [pgvector](https://github.com/pgvector/pgvector) | C5 Semantic Index、C6 Store | 保存 embedding 并参与混合检索 | 直接依赖 |
 | [Qwen3 Embedding](https://github.com/QwenLM/Qwen3-Embedding) | C5 Semantic Index | 固定 0.6B embedding revision 对深候选做本地重排 | 实验 adapter 已实现；全仓 embedding 与独立 reranker 延后 |
-| [MCP SDK](https://github.com/modelcontextprotocol/python-sdk) | C9 MCP Gateway | 实现标准 tools/resources 和 Streamable HTTP | 直接依赖，首版锁定 `1.28.0` |
+| [MCP SDK](https://github.com/modelcontextprotocol/python-sdk) | C9 MCP Gateway | 实现标准只读 tools、stdio 和 Stateless Streamable HTTP | 可选依赖，首版锁定 `2.0.0` |
 | [Keycloak](https://www.keycloak.org/) | C10 Identity/Policy | 没有企业 IdP 时提供 OIDC 测试与试点身份源 | 条件依赖；不替代仓库 ACL |
 | [Tabby](https://github.com/TabbyML/tabby) | 产品参考 | 比较 Answer Engine 和仓库上下文体验 | 仅参考/对照，不 fork、不作为运行依赖 |
 | [Continue](https://github.com/continuedev/continue) | 客户端验证 | 验证不同模型和 MCP 调用 | 仅测试客户端 |
@@ -530,7 +530,7 @@ AIKnowledge/
 
 ## 16. 下一步
 
-当前已经完成 Linux 6.18.40 全树 source-only snapshot、结构化关系与缓存、SQLite/PostgreSQL publisher、Zoekt、lexical/symbol/relation RRF，以及固定 Qwen3 模型的 Top-100 候选语义消融。跨仓 Phase 0C 已实现不可变 solution snapshot、2～4 仓高召回路由基线、Context Pack v1.3、跨仓 source-inferred link 和 PoC partial visibility；10 个双仓 fixture 问题的 routing recall 与版本组合准确率均为 `1.0`。依据 [ADR-0002](decisions/0002-semantic-candidate-reranking.md)，保留语义实验接口但暂不启用全量向量索引。下一步实现只读 MCP，随后接入正式 OIDC/ACL/RLS。人工证据复核仍可暂停，但 semantic 与真实跨仓验收门槛不会因此降低。source-only 约束见 [ADR-0001](decisions/0001-source-only-indexing.md)，跨仓实现见[solution snapshot 文档](cross-repo-solution.md)，组件映射和任务见技术蓝图及实施计划。
+当前已经完成 Linux 6.18.40 全树 source-only snapshot、结构化关系与缓存、SQLite/PostgreSQL publisher、Zoekt、lexical/symbol/relation RRF，以及固定 Qwen3 模型的 Top-100 候选语义消融。跨仓 Phase 0C 已实现不可变 solution snapshot、2～4 仓高召回路由基线、Context Pack v1.3、跨仓 source-inferred link 和 PoC partial visibility；10 个双仓 fixture 问题的 routing recall 与版本组合准确率均为 `1.0`。只读 MCP 已实现三个窄工具、stdio 与 Stateless Streamable HTTP，Claude Code 真实 stdio 客户端已连接成功。依据 [ADR-0002](decisions/0002-semantic-candidate-reranking.md)，保留语义实验接口但暂不启用全量向量索引。下一步完成 Cursor UI 验收并接入正式 OIDC/ACL/RLS。人工证据复核仍可暂停，但 semantic 与真实跨仓验收门槛不会因此降低。source-only 约束见 [ADR-0001](decisions/0001-source-only-indexing.md)，跨仓实现见[solution snapshot 文档](cross-repo-solution.md)，组件映射和任务见技术蓝图及实施计划。
 
 ## 17. 调研依据
 
@@ -547,7 +547,7 @@ AIKnowledge/
 - Tabby 已包含自托管、仓库上下文、团队能力和面向内部研发的 Answer Engine，可作为产品基线：[Tabby](https://github.com/TabbyML/tabby)
 - OpenGrok 提供源码搜索、交叉引用和版本历史导航：[OpenGrok](https://github.com/oracle/opengrok)
 - GraphRAG 明确提示索引成本较高，适合在验证需求后选择性采用：[Microsoft GraphRAG](https://github.com/microsoft/graphrag)
-- MCP Python SDK 的 `2.0.0rc1` 仍标记为 pre-release；首版锁定 `1.28.0` 并使用 Streamable HTTP：[MCP Python SDK releases](https://github.com/modelcontextprotocol/python-sdk/releases)
+- MCP Python SDK `2.0.0` 已于 2026-07-28 正式 GA；首版锁定该版本并同时验证 stdio 与 Stateless Streamable HTTP：[MCP Python SDK v2.0.0](https://github.com/modelcontextprotocol/python-sdk/releases/tag/v2.0.0)
 - Qwen3 Embedding/Reranker 提供面向文本与代码检索的多尺寸模型，首轮评测使用 0.6B 候选：[Qwen3-Embedding](https://github.com/QwenLM/Qwen3-Embedding)
 - OWASP 将外部文件引发的间接 Prompt Injection 作为独立风险，RAG 本身不能完全缓解：[OWASP LLM01](https://genai.owasp.org/llmrisk/llm01-prompt-injection/)
 - PostgreSQL 18 是当前稳定主版本，17 仍在支持周期内：[PostgreSQL Versioning Policy](https://www.postgresql.org/support/versioning/)

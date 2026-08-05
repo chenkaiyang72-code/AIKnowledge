@@ -124,7 +124,7 @@ solution publisher 使用独立 advisory lock、成员存在性检查、完整 m
 
 GitHub Actions 使用 PostgreSQL 17 pgvector service 执行这组测试。本地机器不需要安装 Docker 或 PostgreSQL。
 
-2026-08-02 的首次完整 CI 已通过：23 个测试全部成功，包括 Alembic upgrade、pgvector extension 和唯一 active snapshot 约束，见 [run 30750390588](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30750390588)。schema v2 和 PostgreSQL `ReadCatalog` adapter 随后完成 24/24 测试，包括 PostgreSQL Context Pack 端到端验证，见 [run 30750652975](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30750652975)。原子 publisher 加入后完成 25/25 测试，覆盖幂等、切换、重新激活和回滚，见 [run 30751565583](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30751565583)。
+2026-08-02 的首次完整 CI 已通过：23 个测试全部成功，包括 Alembic upgrade、pgvector extension 和唯一 active snapshot 约束，见 [run 30750390588](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30750390588)。schema v2 和 PostgreSQL `ReadCatalog` adapter 随后完成 24/24 测试，包括 PostgreSQL Context Pack 端到端验证，见 [run 30750652975](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30750652975)。原子 publisher 加入后完成 25/25 测试，覆盖幂等、切换、重新激活和回滚，见 [run 30751565583](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/30751565583)。schema v3 与 solution publisher 随后在 PostgreSQL 17 + pgvector + Zoekt 环境完成 43/43 测试，见 [run 31043795023](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31043795023)。
 
 ## 尚未完成
 

@@ -1,8 +1,8 @@
 # AIKnowledge 项目进展
 
 最后更新：2026-08-06<br>
-当前阶段：Phase 1A 只读 MCP（准备中；Phase 0C 共享 CI 待确认）<br>
-当前结论：Phase 0C 跨仓工程 PoC 已在本地完成。solution snapshot 可固定多个 repository snapshot，Context Pack v1.3 可分仓检索、公平合并并输出跨仓 source-inferred link；10 个双仓 fixture 问题的 routing recall 和版本组合准确率均为 `1.0`，部分可见测试未泄露隐藏成员。PostgreSQL schema/publisher 集成已实现，等待共享 CI 终验；人工真实问题复核继续暂停。
+当前阶段：Phase 1A 只读 MCP（本地工程与 Claude Code 验收完成，Cursor UI 验收待执行）<br>
+当前结论：跨仓 solution snapshot 和只读 MCP 已形成一条端到端链路。Phase 0C 已在共享 PostgreSQL 17 + pgvector + Zoekt CI 通过 43/43 测试；官方 SDK 固定为已 GA 的 `mcp==2.0.0`，三个工具可通过内存 client、真实 stdio 子进程和 stateless Streamable HTTP 调用，Claude Code `2.1.222` 真实连接状态为 `Connected`。连续 100 次协议请求稳定，SQLite 以只读模式打开，未认证 HTTP 强制只绑定 loopback；远程团队访问仍必须等待 Phase 1B 身份/ACL/RLS。
 
 ## 维护规则
 
@@ -17,8 +17,8 @@
 | --- | --- | --- | --- | --- | --- |
 | 1 | Phase 0A 评测基线 | 建立可以衡量检索质量的真实问题集和普通文本检索基线 | 固定源码范围、30～50 个真实问题、负样本、ripgrep baseline、Recall/MRR 报告 | 数据经过人工复核，指标可重复运行 | 暂停，保留现有数据 |
 | 2 | Phase 0B 结构化检索 | 建立第一版单仓代码知识索引 | 不可变 snapshot、Tree-sitter、source-only 关系索引、Zoekt、pgvector、混合检索、Context Pack | Evidence Recall@10、版本准确率和负样本指标达到门槛 | 工程实现完成，正式验收待人工复核 |
-| 3 | Phase 0C 跨仓 PoC | 让一个问题可以在一致版本下检索多个仓库 | solution snapshot、仓库路由、跨仓关系、跨仓引用 | 至少 10 个跨仓问题通过评测 | 本地工程验收完成，共享 CI 待确认 |
-| 4 | Phase 1A 只读 MCP | 把知识检索能力提供给现有 AI 客户端 | `/mcp/read`、scope/context tools、Cursor 和 Claude Code 接入 | 两类客户端可以稳定取得相同 Context Pack | 准备中 |
+| 3 | Phase 0C 跨仓 PoC | 让一个问题可以在一致版本下检索多个仓库 | solution snapshot、仓库路由、跨仓关系、跨仓引用 | 至少 10 个跨仓问题通过评测 | 完成：10 题指标 1.0，共享 CI 43/43 通过 |
+| 4 | Phase 1A 只读 MCP | 把知识检索能力提供给现有 AI 客户端 | `/mcp/read`、scope/context tools、Cursor 和 Claude Code 接入 | 两类客户端可以稳定取得相同 Context Pack | 本地工程与 Claude Code 完成，Cursor UI 待验收 |
 | 5 | Phase 1B 团队安全试点 | 支持多人安全共享 | OIDC、仓库 ACL、PostgreSQL RLS、数据出域策略、审计、增量索引 | 越权测试零泄露，索引可增量更新 | 未开始 |
 | 6 | Phase 1C 知识进化闭环 | 让团队提问和反馈转化为受治理的共享知识 | feedback、gap、claim、review、publish、最小管理 UI | 至少一条真实知识完成完整审核发布流程 | 未开始 |
 | 7 | Phase 2 及以后 | 支持开发态代码、更多知识源和规模化部署 | workspace overlay、ADR/Issue/PR connector、更多语言、分片和高可用 | 根据试点指标逐项决定 | 未开始 |
@@ -134,7 +134,7 @@
 - symbol/relation 从 blob 按完整行恢复证据时，返回的 `content_hash` 现绑定实际 evidence body，不再错误沿用首尾可能位于行内的 Tree-sitter AST 片段 hash。
 - 语义里程碑当时本地运行 38 项测试：33 项通过、5 项环境集成测试跳过；semantic provider/cache、证据 hash 修复和既有 PostgreSQL/pgvector + Zoekt 集成已在 [`CI 31041308974`](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31041308974) 全部通过。
 
-### 2.4 Phase 0C 已完成的本地工程工作项
+### 2.4 Phase 0C 已完成的工程工作项
 
 - SQLite catalog 升级到 schema v6，新增 `solution`、`solution_snapshot`、`solution_snapshot_member` 和状态事件；完整 canonical manifest JSON 与 SHA-256 digest 一起保存。
 - 已实现 JSON manifest v1、稳定 ID、成员 repository/snapshot/state 校验，以及 `building -> validated -> active -> superseded` 原子发布；重复发布幂等，历史版本可重新激活。
@@ -144,8 +144,21 @@
 - 查询命中的源码调用候选可与另一可见成员仓中的定义匹配，生成带两端 repository/revision/path/lines citation 的 `source_inferred` link，不伪装成编译器确认关系。
 - 已实现 PoC repository allow-set。隐藏成员不进入检索、evidence、symbols、cross-repository links 或 trace；输出只标记通用 `partial_visibility`，不列出隐藏名称、snapshot 或数量。
 - PostgreSQL 增加独立 schema v3 migration，历史 v1 metadata 不受污染；`PostgresSolutionPublisher` 使用事务 advisory lock 原子发布版本组合，PostgreSQL resolver 可直接驱动跨仓 Context Pack。
-- 双仓自动 fixture 的 10 个跨仓问题 routing recall 为 `1.0`，全部 evidence 的 version combination accuracy 为 `1.0`；本地单元测试已通过，PostgreSQL/pgvector 真实集成等待 GitHub Actions 终验。
-- 当前本地共发现 43 项测试：37 项通过，6 项依赖 PostgreSQL/Zoekt/semantic 环境的集成测试按设计跳过；Alembic `0001 -> 0002 -> 0003` 离线 SQL 生成通过。
+- 双仓自动 fixture 的 10 个跨仓问题 routing recall 为 `1.0`，全部 evidence 的 version combination accuracy 为 `1.0`。
+- PostgreSQL/pgvector/Zoekt 真实共享 CI 已完成 migration、双仓 snapshot/solution 发布、Context Pack 与 partial visibility 验证，43/43 测试通过，见 [run 31043795023](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31043795023)。
+
+### 2.5 Phase 1A 已完成的本地工程工作项
+
+- 经官方 GitHub release 与 PyPI 双重核对，MCP Python SDK `2.0.0` 已于 2026-07-28 GA；已接受 [ADR-0003](decisions/0003-mcp-v2-read-only.md)，替换旧设计中的 v1.28/等待 GA 假设。
+- 新增 `mcp` optional dependency，不影响默认 source scanner、SQLite 或评测安装。
+- 已实现 `aikb_scope_resolve`、`aikb_context_search`、`aikb_context_get` 三个工具，全部声明 read-only/non-destructive/idempotent/closed-world；没有写入、shell、任意 SQL、sampling 或 elicitation 工具。
+- repository 与 solution 共用现有 resolver 和 Context Pack v1.3；MCP adapter 不复制检索逻辑，不执行目标仓库脚本，不编译源码。
+- MCP input schema 限制问题长度、evidence/token/symbol/relation 预算；`context_get` 只接受 catalog 内 repository-relative 路径并拒绝绝对路径与 `..`。
+- 已实现 stdio 与 stateless Streamable HTTP `/mcp/read`；HTTP 请求体上限 1 MiB，Phase 1A 未认证服务拒绝绑定非 loopback 地址。
+- 协议测试覆盖严格 structured output、PoC partial visibility、隐藏仓库零输出、未授权 scope、路径穿越、连续 100 次稳定调用、stdio 子进程和真实 HTTP 调用。
+- MCP 以 SQLite `mode=ro&immutable=1` URI 和 `query_only` 打开已冻结 catalog，只校验 schema，不创建数据库、目录、WAL 或 migration；缺失 catalog 的工具调用返回错误且零落盘。本地 MCP 不与 publisher 并发，团队常驻服务将在 Phase 1B 使用 PostgreSQL reader。
+- 已提供 Cursor `.cursor/mcp.json`、Claude Code `claude mcp add` 与本机 HTTP 配置；Claude Code `2.1.222` 已在隔离配置中真实启动 `aikb-mcp` 并显示 `Connected`，用户原配置未改动。Cursor CLI 不提供等价健康检查，UI 调用验收待执行。
+- 当前本地共发现 50 项测试：44 项通过，6 项依赖 PostgreSQL/Zoekt 集成环境的测试按设计跳过。
 
 ## 3. 还未完成的计划
 
@@ -153,14 +166,14 @@
 
 第一批 10 个问题已经全部保留，证据仍为 `draft`。负样本、证据复核、30～50 题黄金集和正式 baseline 暂不推进；等结构化检索需要验收时恢复，不删除现有问题、来源和报告。
 
-### 3.2 当前优先级：推进 Phase 1A 只读 MCP
+### 3.2 当前优先级：完成 Cursor 验收并进入 Phase 1B
 
 | 优先级 | 未完成事项 | 下一动作 | 完成条件 |
 | --- | --- | --- | --- |
-| P0 | 固定 MCP SDK 并建立只读服务骨架 | 锁定稳定 SDK，定义 `scope.resolve`、`context.search`、`context.get` | stdio/Streamable HTTP 均能返回严格 schema，写操作不存在 |
-| P0 | 接入本地与 solution Context Pack | MCP tool 参数映射现有 resolver/builder，限制条数、字节和 token | 相同请求与 CLI 产生相同 scope/evidence/citation |
-| P0 | 建立协议与安全回归 | MCP Inspector/内存客户端测试错误、预算、路径和敏感字段 | 100 次标准查询无协议错误，响应不泄露内部路径或凭据 |
-| P1 | 编写 Cursor/Claude Code 接入指南 | 给出本地 stdio 与团队 HTTP 配置 | 两类客户端可调用同一只读工具契约 |
+| P0 | 完成实际客户端矩阵 | 在本机 Cursor UI 按文档连接 stdio 并调用三个工具；Claude Code 已完成真实健康检查 | Cursor 与 Claude Code 取得相同 solution scope、evidence 与 citation |
+| P0 | 建立正式 principal/ACL 边界 | 设计并实现用户、团队、repository grant 与 query-before-filter | 客户端不能自行声明 allow-set，隐藏仓库在 DB/应用两层均不可见 |
+| P0 | 增加 PostgreSQL RLS 与审计 | principal/security domain session context、RLS policy、retrieval trace 写入 | 越权测试为零泄露，每次 MCP 调用可按 principal/trace 审计 |
+| P1 | 接入远程 OAuth/OIDC | token verifier、audience/scope/expiry/revocation、Protected Resource Metadata | 非 loopback HTTP 只有有效的 server-audience token 可访问 |
 | P1 | 修复候选池外检索缺口 | 优先分析 vmalloc/kmalloc 文档、oldconfig 行范围和 module 问题 | 不靠目录硬编码，新增召回或 source-only 规则由证据和回归测试支撑 |
 
 本地扫描和 PostgreSQL 共享存储的首条链路已经打通，但以下仍未完成：
@@ -177,7 +190,7 @@
 ### 3.3 后续阶段
 
 - 跨仓 solution snapshot、路由基线和 PoC 部分可见性已完成；真实团队问题人工验收及大规模选择性路由尚未完成。
-- Cursor、Claude Code 等客户端的只读 MCP 接入尚未实现。
+- Claude Code 只读 MCP 接入已验证；Cursor UI 与 VS Code/Copilot 兼容验证尚未完成。
 - OIDC、ACL、RLS、数据出域策略、审计和安全测试尚未实现。
 - feedback、gap、claim、review、publish 知识进化闭环尚未实现。
 - Web 管理控制台、workspace overlay 和更多知识源 connector 尚未实现。
@@ -201,12 +214,13 @@
 | 11 | 接入 Zoekt 正式 lexical adapter | Codex | immutable export、预构建 Zoekt index job、provider adapter、FTS fallback、live CI | 已完成，29/29 测试通过，run `30753488893` |
 | 12 | 恢复评测问题集 | Codex | 自动评测 runner、FTS/RRF 对比、失败分类；人工复核继续暂停 | 已完成：hybrid Range Recall@10 `0.5926`、Range MRR `0.6833`，形成 vector 决策输入 |
 | 13 | 实验 vector/reranker | Codex | provider 边界、可缓存 embedding/score、与当前 hybrid 的消融报告 | 已完成：候选融合四项无回退；保留实验接口，按 ADR-0002 暂缓全量向量索引 |
-| 14 | 实现跨仓 solution snapshot | Codex | schema、固定成员版本、resolver、两阶段检索、partial visibility、跨仓 Context Pack | 已完成本地工程验收：10 题 routing recall 与版本准确率均为 1.0，共享 CI 待确认 |
-| 15 | 实现只读 MCP MVP | Codex | 固定 SDK、read-only tools、stdio/Streamable HTTP、协议测试 | Cursor 与 Claude Code 可稳定取得相同 Context Pack |
+| 14 | 实现跨仓 solution snapshot | Codex | schema、固定成员版本、resolver、两阶段检索、partial visibility、跨仓 Context Pack | 已完成：10 题 routing recall 与版本准确率均为 1.0，共享 CI 43/43 通过 |
+| 15 | 实现只读 MCP MVP | Codex | 固定 SDK、read-only tools、stdio/Streamable HTTP、协议测试 | 本地工程与 Claude Code 真实连接完成；Cursor UI 验收待执行 |
+| 16 | 实现团队身份与 ACL 边界 | Codex | principal、repository grant、RLS、审计、OAuth verifier | 越权测试零泄露，远程 HTTP 可安全开放 |
 
 ### 现在立即要做的动作
 
-下一项开发工作是只读 MCP MVP：先锁定稳定 Python SDK 并用内存客户端固定 tool schema，再把 `scope.resolve`、`context.search`、`context.get` 映射到现有 repository/solution resolver 和 Context Pack builder；随后增加 stdio 与 stateless Streamable HTTP 入口、预算/错误/敏感字段回归和 Cursor/Claude Code 配置。服务不开放写工具，也不会因为 MCP 请求编译或执行任何目标仓库代码。
+下一项工作直接建立 Phase 1B principal、repository grant、query-before-filter、PostgreSQL RLS 与 retrieval audit；同时保留 Cursor UI 调用验收。远程 HTTP 在 token audience 与数据库权限双重强制完成前继续禁止非 loopback 绑定。
 
 ## 相关文档
 
@@ -226,3 +240,5 @@
 - [语义候选重排自动报告](../evals/reports/linux-6.18.40-semantic-qwen3-512.md)
 - [ADR-0002：保留语义候选重排，暂不启用全仓向量索引](decisions/0002-semantic-candidate-reranking.md)
 - [跨仓 solution snapshot、检索与部分可见性](cross-repo-solution.md)
+- [只读 MCP 服务与客户端配置](mcp-read-server.md)
+- [ADR-0003：MCP v2 只读接入](decisions/0003-mcp-v2-read-only.md)

@@ -102,7 +102,7 @@ python -m aikb kb-solution-publish-postgres `
 - manifest 重复发布、版本切换和历史重新激活均通过；
 - 隐藏一个仓库后，序列化的 scope、evidence、symbol、跨仓 link 和 trace 中均不出现其名称、snapshot 或源码标识符。
 
-PostgreSQL 端到端用例会在 GitHub Actions 的 PostgreSQL 17 + pgvector 服务中执行 migration、双仓 snapshot 发布、solution 发布、跨仓 Context Pack 和 partial visibility 验证。本地未安装 PostgreSQL 时该用例按设计跳过。
+PostgreSQL 端到端用例已在 GitHub Actions 的 PostgreSQL 17 + pgvector 服务中执行 migration、双仓 snapshot 发布、solution 发布、跨仓 Context Pack 和 partial visibility 验证；43/43 测试通过，见 [run 31043795023](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31043795023)。本地未安装 PostgreSQL 时该用例按设计跳过。
 
 ## 当前边界
 
