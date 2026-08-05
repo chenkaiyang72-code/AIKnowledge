@@ -41,6 +41,7 @@ DEFAULT_CHUNK_OVERLAP = 20
 DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024
 DEFAULT_DEPENDENCY_MAX_FILES = 500
 DEFAULT_DEPENDENCY_MAX_CANDIDATES = 8
+DEFAULT_ANALYSIS_CACHE_BATCH_SIZE = 250
 
 
 LANGUAGE_BY_SUFFIX = {
@@ -95,6 +96,18 @@ def utc_now() -> str:
 def stable_id(prefix: str, *parts: str) -> str:
     digest = hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
     return f"{prefix}_{digest[:24]}"
+
+
+def _analysis_artifact_id(
+    candidate: FileCandidate,
+    analysis_profile_digest: str,
+) -> str:
+    return stable_id(
+        "analysis",
+        candidate.blob_id,
+        candidate.language,
+        analysis_profile_digest,
+    )
 
 
 def load_scope(path: Path) -> dict[str, Any]:
@@ -429,6 +442,139 @@ def expand_scan_dependencies(
     )
 
 
+def _prewarm_analysis_cache(
+    connection: sqlite3.Connection,
+    files: Iterable[FileCandidate],
+    analysis_profile_digest: str,
+    chunk_lines: int,
+    chunk_overlap: int,
+    created_at: str,
+    batch_size: int,
+) -> set[str]:
+    """Persist content-addressed analysis before snapshot materialization.
+
+    Cache rows are independent of snapshot visibility, so completed batches can
+    survive a later snapshot failure without exposing a partial knowledge base.
+    """
+    if batch_size < 1:
+        raise ValueError("analysis cache batch size must be positive")
+    created_artifact_ids: set[str] = set()
+    pending_count = 0
+    try:
+        for candidate in files:
+            data = candidate.absolute_path.read_bytes()
+            actual_blob_id = hashlib.sha256(data).hexdigest()
+            if actual_blob_id != candidate.blob_id:
+                raise RuntimeError(
+                    f"source changed during analysis cache prewarm: {candidate.relative_path}"
+                )
+            _, decode_status = decode_source(data)
+            if decode_status != candidate.decode_status:
+                raise RuntimeError(
+                    "source decoding changed during analysis cache prewarm: "
+                    f"{candidate.relative_path}"
+                )
+            cached_blob = connection.execute(
+                "SELECT size_bytes FROM blob WHERE id = ?",
+                (candidate.blob_id,),
+            ).fetchone()
+            if cached_blob is None:
+                connection.execute(
+                    """
+                    INSERT INTO blob(
+                        id, algorithm, size_bytes, compression,
+                        compressed_content, created_at)
+                    VALUES (?, 'sha256', ?, 'zlib', ?, ?)
+                    """,
+                    (candidate.blob_id, len(data), zlib.compress(data), created_at),
+                )
+            elif cached_blob["size_bytes"] != len(data):
+                raise RuntimeError(
+                    f"analysis cache blob is invalid: {candidate.relative_path}"
+                )
+            analysis_artifact_id = _analysis_artifact_id(
+                candidate, analysis_profile_digest
+            )
+            cached_analysis = connection.execute(
+                """
+                SELECT compressed_payload
+                FROM analysis_artifact
+                WHERE id = ?
+                """,
+                (analysis_artifact_id,),
+            ).fetchone()
+            if cached_analysis is None:
+                try:
+                    parse_outcome = build_chunks(
+                        data=data,
+                        language=candidate.language,
+                        chunk_lines=chunk_lines,
+                        overlap=chunk_overlap,
+                    )
+                    source_facts = extract_source_facts(data, candidate.language)
+                except Exception as error:
+                    raise RuntimeError(
+                        "source analysis failed for "
+                        f"{candidate.relative_path}: {error}"
+                    ) from error
+                artifact_conditions = set(source_facts.conditions)
+                artifact_conditions.update(
+                    item.condition
+                    for item in source_facts.occurrences
+                    if item.condition is not None
+                )
+                artifact_conditions.update(
+                    item.condition
+                    for item in source_facts.relations
+                    if item.condition is not None
+                )
+                payload = encode_analysis_artifact(parse_outcome, source_facts)
+                artifact_cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO analysis_artifact(
+                        id, blob_id, language, analysis_profile_digest,
+                        schema_version, compression, compressed_payload,
+                        chunk_count, symbol_occurrence_count, relation_count,
+                        condition_count, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'zlib', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        analysis_artifact_id,
+                        candidate.blob_id,
+                        candidate.language,
+                        analysis_profile_digest,
+                        ANALYSIS_ARTIFACT_SCHEMA_VERSION,
+                        zlib.compress(payload),
+                        len(parse_outcome.chunks),
+                        len(source_facts.occurrences),
+                        len(source_facts.relations),
+                        len(artifact_conditions),
+                        created_at,
+                    ),
+                )
+                if artifact_cursor.rowcount:
+                    created_artifact_ids.add(analysis_artifact_id)
+            else:
+                try:
+                    decode_analysis_artifact(
+                        zlib.decompress(cached_analysis["compressed_payload"])
+                    )
+                except Exception as error:
+                    raise RuntimeError(
+                        "cached source analysis failed for "
+                        f"{candidate.relative_path}: {error}"
+                    ) from error
+            pending_count += 1
+            if pending_count >= batch_size:
+                connection.commit()
+                pending_count = 0
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    return created_artifact_ids
+
+
 def ingest_source(
     catalog: Catalog,
     scope: dict[str, Any],
@@ -442,6 +588,7 @@ def ingest_source(
     dependency_depth: int | None = None,
     dependency_max_files: int | None = None,
     dependency_max_candidates: int | None = None,
+    analysis_cache_batch_size: int = DEFAULT_ANALYSIS_CACHE_BATCH_SIZE,
 ) -> dict[str, Any]:
     source = source.resolve()
     inspect_source(scope, source, archive)
@@ -607,8 +754,17 @@ def ingest_source(
         )
         return result
 
-    now = utc_now()
     connection = catalog.connection
+    now = utc_now()
+    prewarmed_artifact_ids = _prewarm_analysis_cache(
+        connection=connection,
+        files=scan.files,
+        analysis_profile_digest=analysis_profile_digest,
+        chunk_lines=chunk_lines,
+        chunk_overlap=chunk_overlap,
+        created_at=now,
+        batch_size=analysis_cache_batch_size,
+    )
     try:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(
@@ -692,21 +848,18 @@ def ingest_source(
                 raise RuntimeError(
                     f"source decoding changed during ingest: {candidate.relative_path}"
                 )
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO blob(
-                    id, algorithm, size_bytes, compression, compressed_content, created_at)
-                VALUES (?, 'sha256', ?, 'zlib', ?, ?)
-                """,
-                (candidate.blob_id, len(data), zlib.compress(data), now),
-            )
+            cached_blob = connection.execute(
+                "SELECT size_bytes FROM blob WHERE id = ?",
+                (candidate.blob_id,),
+            ).fetchone()
+            if cached_blob is None or cached_blob["size_bytes"] != len(data):
+                raise RuntimeError(
+                    f"analysis cache blob is missing or invalid: {candidate.relative_path}"
+                )
             unique_blobs.add(candidate.blob_id)
             file_id = file_ids_by_path[candidate.relative_path]
-            analysis_artifact_id = stable_id(
-                "analysis",
-                candidate.blob_id,
-                candidate.language,
-                analysis_profile_digest,
+            analysis_artifact_id = _analysis_artifact_id(
+                candidate, analysis_profile_digest
             )
             cached_analysis = connection.execute(
                 """
@@ -776,7 +929,11 @@ def ingest_source(
                         "cached source analysis failed for "
                         f"{candidate.relative_path}: {error}"
                     ) from error
-                analysis_cache_hit_count += 1
+                if analysis_artifact_id in prewarmed_artifact_ids:
+                    prewarmed_artifact_ids.remove(analysis_artifact_id)
+                    analysis_cache_miss_count += 1
+                else:
+                    analysis_cache_hit_count += 1
             parse_error_count += parse_outcome.syntax_error_count
             connection.execute(
                 """

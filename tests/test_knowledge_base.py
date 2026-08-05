@@ -3,8 +3,10 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from aikb.catalog import Catalog
+from aikb.ingestion import build_chunks as real_build_chunks
 from aikb.ingestion import ingest_source
 
 
@@ -114,6 +116,42 @@ class KnowledgeBaseTests(unittest.TestCase):
         self.assertEqual(len(helper_calls), 1)
         self.assertEqual(helper_calls[0]["confidence"], "source_inferred")
         self.assertIn("CONFIG_DEMO", helper_calls[0]["source_condition"])
+
+    def test_analysis_cache_batches_survive_snapshot_failure(self) -> None:
+        database = self.root / "catalog.db"
+        build_count = 0
+
+        def fail_after_first_file(*args: object, **kwargs: object):
+            nonlocal build_count
+            build_count += 1
+            if build_count == 2:
+                raise RuntimeError("injected analysis failure")
+            return real_build_chunks(*args, **kwargs)
+
+        with Catalog(database) as catalog:
+            catalog.initialize()
+            with patch("aikb.ingestion.build_chunks", side_effect=fail_after_first_file):
+                with self.assertRaisesRegex(
+                    RuntimeError, "injected analysis failure"
+                ):
+                    ingest_source(
+                        catalog,
+                        self.scope,
+                        self.source,
+                        analysis_cache_batch_size=1,
+                    )
+            cached_artifacts = catalog.connection.execute(
+                "SELECT COUNT(*) AS count FROM analysis_artifact"
+            ).fetchone()["count"]
+            snapshots = catalog.connection.execute(
+                "SELECT COUNT(*) AS count FROM snapshot"
+            ).fetchone()["count"]
+            completed = ingest_source(catalog, self.scope, self.source)
+
+        self.assertEqual(cached_artifacts, 1)
+        self.assertEqual(snapshots, 0)
+        self.assertEqual(completed["analysis_cache_hit_count"], 1)
+        self.assertEqual(completed["analysis_cache_miss_count"], 1)
 
     def test_changed_manifest_creates_new_snapshot_and_supersedes_old(self) -> None:
         database = self.root / "catalog.db"
