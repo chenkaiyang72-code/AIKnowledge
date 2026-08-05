@@ -5,7 +5,7 @@ import sys
 from aikb import evaluation, knowledge_cli
 
 
-EVALUATION_COMMANDS = {"inspect", "baseline"}
+EVALUATION_COMMANDS = {"inspect", "baseline", "structured"}
 KNOWLEDGE_COMMANDS = {
     "kb-ingest",
     "kb-stats",
@@ -26,7 +26,8 @@ def main(argv: list[str] | None = None) -> int:
             "AIKnowledge CLI\n\n"
             "Evaluation commands:\n"
             "  inspect       verify a source snapshot\n"
-            "  baseline      run the Phase 0A lexical baseline\n\n"
+            "  baseline      run the Phase 0A lexical baseline\n"
+            "  structured    compare catalog lexical retrieval with hybrid RRF\n\n"
             "Knowledge-base commands:\n"
             "  kb-ingest     scan source into an immutable local snapshot\n"
             "  kb-stats      show catalog and active snapshot statistics\n"

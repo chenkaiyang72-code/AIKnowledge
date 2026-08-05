@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -10,6 +11,11 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
+
+from aikb.catalog import Catalog, SearchHit
+from aikb.retrieval import HybridHit, retrieve_hybrid
+from aikb.storage import ReadCatalog
+from aikb.zoekt import ZoektClient, ZoektReadCatalog
 
 
 REQUIRED_QUESTION_FIELDS = {
@@ -328,6 +334,237 @@ def run_baseline(
     }
 
 
+def _serialize_hit(hit: SearchHit) -> dict[str, Any]:
+    return hit.as_dict()
+
+
+def _serialize_hybrid_hit(item: HybridHit) -> dict[str, Any]:
+    return {
+        **item.hit.as_dict(),
+        "fused_score": item.fused_score,
+        "contributions": [
+            contribution.as_dict() for contribution in item.contributions
+        ],
+    }
+
+
+def _ranges_overlap(
+    expected_start: int,
+    expected_end: int,
+    actual_start: int,
+    actual_end: int,
+) -> bool:
+    return expected_start <= actual_end and actual_start <= expected_end
+
+
+def evaluate_structured_results(
+    questions: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    top_k: int,
+) -> dict[str, Any]:
+    """Measure both file recall and exact annotated evidence-range recall."""
+
+    result_by_id = {item["id"]: item for item in results}
+    expected_file_total = 0
+    found_file_total = 0
+    expected_range_total = 0
+    found_range_total = 0
+    file_reciprocal_ranks: list[float] = []
+    range_reciprocal_ranks: list[float] = []
+    complete_questions = 0
+    partial_questions = 0
+    missed_questions = 0
+    per_question: list[dict[str, Any]] = []
+
+    for question in questions:
+        ranked = result_by_id[question["id"]]["results"][:top_k]
+        required = question.get("required_evidence", [])
+        required_files = sorted({item["path"] for item in required})
+        file_ranks: dict[str, int] = {}
+        for rank, item in enumerate(ranked, start=1):
+            file_ranks.setdefault(item["path"], rank)
+
+        found_files = sorted(path for path in required_files if path in file_ranks)
+        expected_file_total += len(required_files)
+        found_file_total += len(found_files)
+        first_file_rank = min(
+            (file_ranks[path] for path in required_files if path in file_ranks),
+            default=None,
+        )
+        if required_files:
+            file_reciprocal_ranks.append(
+                1.0 / first_file_rank if first_file_rank is not None else 0.0
+            )
+
+        range_matches: list[dict[str, Any]] = []
+        range_ranks: list[int] = []
+        for evidence in required:
+            expected_start = evidence["start_line"]
+            expected_end = evidence["end_line"]
+            matched_rank: int | None = None
+            matched_citation: str | None = None
+            for rank, item in enumerate(ranked, start=1):
+                if item["path"] != evidence["path"]:
+                    continue
+                if _ranges_overlap(
+                    expected_start,
+                    expected_end,
+                    item["start_line"],
+                    item["end_line"],
+                ):
+                    matched_rank = rank
+                    matched_citation = item["citation"]
+                    break
+            expected_range_total += 1
+            if matched_rank is not None:
+                found_range_total += 1
+                range_ranks.append(matched_rank)
+            range_matches.append(
+                {
+                    "path": evidence["path"],
+                    "start_line": expected_start,
+                    "end_line": expected_end,
+                    "rank": matched_rank,
+                    "citation": matched_citation,
+                }
+            )
+
+        if required:
+            range_reciprocal_ranks.append(
+                1.0 / min(range_ranks) if range_ranks else 0.0
+            )
+        if required and len(range_ranks) == len(required):
+            status = "complete"
+            complete_questions += 1
+        elif range_ranks:
+            status = "partial"
+            partial_questions += 1
+        else:
+            status = "missed"
+            missed_questions += 1
+        per_question.append(
+            {
+                "id": question["id"],
+                "status": status,
+                "expected_files": required_files,
+                "found_files": found_files,
+                "first_file_rank": first_file_rank,
+                "range_matches": range_matches,
+            }
+        )
+
+    return {
+        f"file_recall_at_{top_k}": (
+            found_file_total / expected_file_total if expected_file_total else None
+        ),
+        f"evidence_range_recall_at_{top_k}": (
+            found_range_total / expected_range_total if expected_range_total else None
+        ),
+        "file_mrr": (
+            sum(file_reciprocal_ranks) / len(file_reciprocal_ranks)
+            if file_reciprocal_ranks
+            else None
+        ),
+        "evidence_range_mrr": (
+            sum(range_reciprocal_ranks) / len(range_reciprocal_ranks)
+            if range_reciprocal_ranks
+            else None
+        ),
+        "files_found": found_file_total,
+        "files_total": expected_file_total,
+        "evidence_ranges_found": found_range_total,
+        "evidence_ranges_total": expected_range_total,
+        "questions_complete": complete_questions,
+        "questions_partial": partial_questions,
+        "questions_missed": missed_questions,
+        "per_question": per_question,
+    }
+
+
+def run_structured_evaluation(
+    catalog: ReadCatalog,
+    questions: list[dict[str, Any]],
+    top_k: int,
+    repository: str | None = None,
+    snapshot_id: str | None = None,
+) -> dict[str, Any]:
+    snapshots = catalog.resolve_snapshots(repository, snapshot_id)
+    lexical_questions: list[dict[str, Any]] = []
+    hybrid_questions: list[dict[str, Any]] = []
+    lexical_channels: set[str] = set()
+
+    for question in questions:
+        query = " ".join(question["query_terms"])
+        lexical = catalog.search_lexical(
+            query,
+            top_k=top_k,
+            repository=repository,
+            snapshot_id=snapshot_id,
+        )
+        lexical_channels.add(lexical.channel)
+        lexical_questions.append(
+            {
+                "id": question["id"],
+                "question": question["question"],
+                "query": query,
+                "results": [_serialize_hit(item) for item in lexical.hits],
+            }
+        )
+        hybrid = retrieve_hybrid(
+            catalog,
+            query,
+            top_k=top_k,
+            repository=repository,
+            snapshot_id=snapshot_id,
+        )
+        hybrid_questions.append(
+            {
+                "id": question["id"],
+                "question": question["question"],
+                "query": query,
+                "identifier_terms": list(hybrid.identifier_terms),
+                "channel_candidate_counts": hybrid.channel_candidate_counts,
+                "results": [_serialize_hybrid_hit(item) for item in hybrid.hits],
+            }
+        )
+
+    if len(lexical_channels) != 1:
+        raise RuntimeError("evaluation observed inconsistent lexical providers")
+    lexical_channel = next(iter(lexical_channels))
+    return {
+        "schema_version": 2,
+        "dataset": {
+            "questions": len(questions),
+            "required_evidence_ranges": sum(
+                len(question.get("required_evidence", [])) for question in questions
+            ),
+        },
+        "scope": {
+            "repository": repository,
+            "requested_snapshot_id": snapshot_id,
+            "resolved_snapshots": snapshots,
+        },
+        "top_k": top_k,
+        "query_source": "query_terms",
+        "retrievers": {
+            "lexical": {
+                "name": lexical_channel,
+                "metrics": evaluate_structured_results(
+                    questions, lexical_questions, top_k
+                ),
+                "questions": lexical_questions,
+            },
+            "hybrid_rrf": {
+                "name": f"{lexical_channel}+symbol_exact+relation_source",
+                "metrics": evaluate_structured_results(
+                    questions, hybrid_questions, top_k
+                ),
+                "questions": hybrid_questions,
+            },
+        },
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIKnowledge Phase 0A evaluation CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -343,27 +580,78 @@ def build_parser() -> argparse.ArgumentParser:
     baseline_parser.add_argument("--source", type=Path, required=True)
     baseline_parser.add_argument("--output", type=Path, required=True)
     baseline_parser.add_argument("--top-k", type=int, default=10)
+
+    structured_parser = subparsers.add_parser(
+        "structured",
+        help="compare catalog lexical retrieval with hybrid RRF",
+    )
+    structured_parser.add_argument("--questions", type=Path, required=True)
+    structured_parser.add_argument("--db", type=Path, required=True)
+    structured_parser.add_argument("--output", type=Path, required=True)
+    structured_parser.add_argument("--top-k", type=int, default=10)
+    structured_parser.add_argument("--repository")
+    structured_parser.add_argument("--snapshot-id")
+    structured_parser.add_argument(
+        "--zoekt-url", help="Zoekt webserver base URL; defaults to AIKB_ZOEKT_URL"
+    )
+    structured_parser.add_argument(
+        "--zoekt-required",
+        action="store_true",
+        help="fail when Zoekt is unavailable instead of using catalog FTS",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        scope = load_json(args.scope)
         if args.command == "inspect":
+            scope = load_json(args.scope)
             report = inspect_source(scope, args.source, args.archive)
             print(json.dumps(report, ensure_ascii=False, indent=2))
             return 0
         if args.top_k < 1 or args.top_k > 100:
             raise ValueError("top-k must be between 1 and 100")
         questions = load_questions(args.questions)
-        inspect_source(scope, args.source, None)
-        report = run_baseline(scope, questions, args.source, args.top_k)
+        if args.command == "baseline":
+            scope = load_json(args.scope)
+            inspect_source(scope, args.source, None)
+            report = run_baseline(scope, questions, args.source, args.top_k)
+        else:
+            with Catalog(args.db) as catalog:
+                catalog.initialize()
+                read_catalog: ReadCatalog = catalog
+                zoekt_url = args.zoekt_url or os.environ.get("AIKB_ZOEKT_URL")
+                if args.zoekt_required and not zoekt_url:
+                    raise ValueError(
+                        "--zoekt-required needs --zoekt-url or AIKB_ZOEKT_URL"
+                    )
+                if zoekt_url:
+                    read_catalog = ZoektReadCatalog(
+                        catalog,
+                        ZoektClient(zoekt_url),
+                        fallback_on_unavailable=not args.zoekt_required,
+                    )
+                report = run_structured_evaluation(
+                    read_catalog,
+                    questions,
+                    args.top_k,
+                    repository=args.repository,
+                    snapshot_id=args.snapshot_id,
+                )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("w", encoding="utf-8", newline="\n") as stream:
             json.dump(report, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
-        print(json.dumps(report["metrics"], ensure_ascii=False, indent=2))
+        summary = (
+            report["metrics"]
+            if args.command == "baseline"
+            else {
+                name: value["metrics"]
+                for name, value in report["retrievers"].items()
+            }
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0
     except (OSError, RuntimeError, ValueError, KeyError) as error:
         print(f"error: {error}", file=sys.stderr)
