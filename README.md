@@ -22,6 +22,8 @@
 - [Zoekt source-only 索引与检索适配器](docs/zoekt-adapter.md)
 - [Linux 6.18.40 全树 source-only 验证](docs/full-tree-validation.md)
 - [结构化检索自动评测报告](evals/reports/linux-6.18.40-structured.md)
+- [Qwen3 语义候选重排消融](docs/semantic-ablation.md)
+- [ADR-0002：语义重排与全量向量决策](docs/decisions/0002-semantic-candidate-reranking.md)
 
 首版技术路线：Python 模块化单体与独立 worker，使用 PostgreSQL/pgvector 保存元数据和向量，使用 Tree-sitter、源码标识符/关系提取器和 Zoekt 建立无需编译的代码索引，并通过只读 MCP 网关向不同 AI 客户端提供带版本和引用的 Context Pack。
 
@@ -104,6 +106,8 @@ python -m aikb structured `
 ```
 
 SQLite FTS 全树运行约需 10 分钟；正式 lexical 通道使用 Zoekt。后续只调整 symbol/relation/vector/reranker 时，可以使用 `--reuse-lexical-from` 复用经过 schema、问题、查询、Top K 和 snapshot 校验的 lexical 结果。
+
+语义消融已使用固定 Qwen3-Embedding-0.6B revision、权重 SHA-256、512 维向量和内容寻址 cache 完成。保守的 hybrid + semantic RRF 相对 Top-100 hybrid 候选基线把 File Recall@10 从 `0.7222` 提高到 `0.7778`、Range Recall@10 从 `0.5926` 提高到 `0.6296`，File MRR 保持 `0.9000`，Range MRR 从 `0.7333` 提高到 `0.8000`。provider 与消融 CLI 已保留，但当前 10 题仍是 draft 标注，因此默认 Context Pack 暂不启用 semantic，也不构建 397 万 chunk 的全量向量索引；详见[语义消融文档](docs/semantic-ablation.md)。
 
 ## 核心原则
 

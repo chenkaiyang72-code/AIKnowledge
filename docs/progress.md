@@ -1,8 +1,8 @@
 # AIKnowledge 项目进展
 
 最后更新：2026-08-06<br>
-当前阶段：Phase 0B 全树结构化检索与 vector 决策（进行中）<br>
-当前结论：Linux 6.18.40 固定 scope 已完成 70,925 文件的 source-only 全树扫描和严格行范围评测。无向量 hybrid 的 File Recall@10 为 `0.7222`、Evidence Range Recall@10 为 `0.5926`、File MRR 为 `0.8500`、Range MRR 为 `0.6833`，四项均优于 FTS；下一步以此为冻结工程基线做 vector/reranker 消融，人工证据复核继续暂停。
+当前阶段：Phase 0C 跨仓 solution snapshot（进行中）<br>
+当前结论：Phase 0B 的单仓全树扫描、Zoekt/结构化 hybrid、Context Pack 和 Qwen3 有界候选语义消融均已完成。保守语义融合相对 Top-100 hybrid 候选把 File/Range Recall@10 从 `0.7222`/`0.5926` 提高到 `0.7778`/`0.6296`，File MRR 保持 `0.9000`，Range MRR 从 `0.7333` 提高到 `0.8000`；依据 ADR-0002 保留实验接口但暂不启用全量向量索引。现在开始跨仓一致版本检索，人工证据复核继续暂停。
 
 ## 维护规则
 
@@ -16,8 +16,8 @@
 | 顺序 | 阶段 | 目标 | 主要产出 | 完成条件 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | Phase 0A 评测基线 | 建立可以衡量检索质量的真实问题集和普通文本检索基线 | 固定源码范围、30～50 个真实问题、负样本、ripgrep baseline、Recall/MRR 报告 | 数据经过人工复核，指标可重复运行 | 暂停，保留现有数据 |
-| 2 | Phase 0B 结构化检索 | 建立第一版单仓代码知识索引 | 不可变 snapshot、Tree-sitter、source-only 关系索引、Zoekt、pgvector、混合检索、Context Pack | Evidence Recall@10、版本准确率和负样本指标达到门槛 | 进行中 |
-| 3 | Phase 0C 跨仓 PoC | 让一个问题可以在一致版本下检索多个仓库 | solution snapshot、仓库路由、跨仓关系、跨仓引用 | 至少 10 个跨仓问题通过评测 | 未开始 |
+| 2 | Phase 0B 结构化检索 | 建立第一版单仓代码知识索引 | 不可变 snapshot、Tree-sitter、source-only 关系索引、Zoekt、pgvector、混合检索、Context Pack | Evidence Recall@10、版本准确率和负样本指标达到门槛 | 工程实现完成，正式验收待人工复核 |
+| 3 | Phase 0C 跨仓 PoC | 让一个问题可以在一致版本下检索多个仓库 | solution snapshot、仓库路由、跨仓关系、跨仓引用 | 至少 10 个跨仓问题通过评测 | 进行中 |
 | 4 | Phase 1A 只读 MCP | 把知识检索能力提供给现有 AI 客户端 | `/mcp/read`、scope/context tools、Cursor 和 Claude Code 接入 | 两类客户端可以稳定取得相同 Context Pack | 未开始 |
 | 5 | Phase 1B 团队安全试点 | 支持多人安全共享 | OIDC、仓库 ACL、PostgreSQL RLS、数据出域策略、审计、增量索引 | 越权测试零泄露，索引可增量更新 | 未开始 |
 | 6 | Phase 1C 知识进化闭环 | 让团队提问和反馈转化为受治理的共享知识 | feedback、gap、claim、review、publish、最小管理 UI | 至少一条真实知识完成完整审核发布流程 | 未开始 |
@@ -127,7 +127,12 @@
 - 全树 FTS 指标为 File Recall `0.5556`、Range Recall `0.2593`、File MRR `0.7000`、Range MRR `0.5167`；加入 symbol/relation RRF 后为 `0.7222`、`0.5926`、`0.8500`、`0.6833`，完整题由 0 增至 5。
 - 已修复全树关系召回的跨 JOIN OR 全扫，真实关系查询约 0.010～0.022 秒；已修复多行 macro occurrence 无法映射单行 chunk，`likely`、`container_of`、`EXPORT_SYMBOL` 等定义重新进入 definition-first 通道。
 - SQLite FTS 全树 10 题运行约 605 秒，确认只适合作为离线 baseline；评测 lexical cache 严格校验问题、查询、Top K 和 snapshot，只重算下游 hybrid 为 0.367 秒，为 vector/reranker 消融提供可重复输入。
-- 当前本地运行 36 项测试：31 项通过、5 项环境集成测试跳过；分析缓存、include 索引和报告生成提交已在 PostgreSQL/pgvector + Zoekt CI run [`31028642268`](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31028642268) 通过，最新检索修复待本轮提交后再次跑 CI。
+- 已实现独立 semantic provider、不可变模型指纹、SQLite 内容寻址 embedding cache、Top-100 候选报告校验、纯语义与 RRF 消融 CLI；模型依赖是可选项，不影响默认索引/检索安装。
+- 已固定 `Qwen/Qwen3-Embedding-0.6B@97b0c614…` 和权重 SHA-256，使用 512 维、2048 最大序列、本机 RTX 4060 Ti 完成真实推理。830 个 query/document embedding 冷运行约 31 秒，缓存复跑约 1.3 秒。
+- Top-100 candidate pool 覆盖 15/18 文件、20/27 范围；保守 semantic RRF 的 File/Range Recall@10 为 `0.7778`/`0.6296`，File/Range MRR 为 `0.9000`/`0.8000`，相对深候选四项无回退。
+- 已完成 [ADR-0002](decisions/0002-semantic-candidate-reranking.md)：保留候选重排 provider/cache，默认 Context Pack 暂不启用 semantic，不生成 397 万个全量 embedding，不建立 ANN，也不增加独立 reranker 模型。
+- symbol/relation 从 blob 按完整行恢复证据时，返回的 `content_hash` 现绑定实际 evidence body，不再错误沿用首尾可能位于行内的 Tree-sitter AST 片段 hash。
+- 当前本地运行 38 项测试：33 项通过、5 项环境集成测试跳过；semantic provider/cache、证据 hash 修复和既有 PostgreSQL/pgvector + Zoekt 集成已在 [`CI 31041308974`](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31041308974) 全部通过。
 
 ## 3. 还未完成的计划
 
@@ -135,13 +140,14 @@
 
 第一批 10 个问题已经全部保留，证据仍为 `draft`。负样本、证据复核、30～50 题黄金集和正式 baseline 暂不推进；等结构化检索需要验收时恢复，不删除现有问题、来源和报告。
 
-### 3.2 当前优先级：推进 Phase 0B
+### 3.2 当前优先级：推进 Phase 0C
 
 | 优先级 | 未完成事项 | 下一动作 | 完成条件 |
 | --- | --- | --- | --- |
-| P0 | 实验 vector/reranker 通道 | 在当前 lexical cache 与 hybrid 基线上接 provider，做严格消融 | 四项 Recall/MRR 有可复现净增益且延迟/成本可接受才保留，否则关闭通道 |
-| P1 | 修复剩余高价值检索缺口 | 优先分析 vmalloc/kmalloc 文档、oldconfig 行范围和 `__user`/module 部分命中 | 不靠目录硬编码，新增规则由逐题证据和回归测试支撑 |
-| P1 | 扩大 source-only 规则覆盖 | 完善复杂 Kconfig/Kbuild 变量、更多语言 import 和注册模式 | 未解析/歧义统计可解释，并由真实问题决定规则优先级 |
+| P0 | 实现跨仓 solution snapshot | 建 solution/member/snapshot schema 和一致版本 resolver | 一个查询 scope 只能解析到 manifest 固定的 repository snapshot 集合，禁止混入 active latest |
+| P0 | 实现跨仓检索与 Context Pack | 两阶段 repository routing、分仓召回、统一 RRF 和跨仓 trace | 2～4 仓 fixture 的证据均带正确 repository/revision，顺序确定且可复现 |
+| P0 | 验证 partial visibility | 加 repository ACL test double 和隐藏仓库用例 | 不可见仓库的名称、版本、片段、候选数和关系均不泄露 |
+| P1 | 修复候选池外检索缺口 | 优先分析 vmalloc/kmalloc 文档、oldconfig 行范围和 module 问题 | 不靠目录硬编码，新增召回或 source-only 规则由证据和回归测试支撑 |
 
 本地扫描和 PostgreSQL 共享存储的首条链路已经打通，但以下仍未完成：
 
@@ -149,14 +155,14 @@
 - Kconfig/Kbuild 第一版规则只覆盖常见语法，复杂变量展开和跨文件条件仍需扩展。
 - C header 声明与 C implementation 定义尚未做受约束的 logical symbol 归并；不能仅按同名强制合并，否则配置互斥实现或多个定义会被错误标成唯一目标。
 - Zoekt adapter 和可重复容器流程已完成；团队环境的常驻服务、分片调度、监控与滚动更新尚未部署。
-- lexical（Zoekt/FTS）、symbol、relation RRF 已实现；vector 和团队知识通道尚未接入。
+- lexical（Zoekt/FTS）、symbol、relation RRF 已实现；semantic 候选重排只作为离线实验能力保留，vector 全仓召回和团队知识通道尚未接入。
 - Context Pack v1 已实现，但团队知识、ACL partial visibility 和 provider tokenizer 尚未接入。
 
 只有完成这些工作并通过 Phase 0B 指标后，才可以称为“成功建立了第一版单仓代码知识库”。
 
 ### 3.3 后续阶段
 
-- 跨仓 solution snapshot、两阶段仓库路由和部分可见性尚未实现。
+- 跨仓 solution snapshot、两阶段仓库路由和部分可见性正在实现。
 - Cursor、Claude Code 等客户端的只读 MCP 接入尚未实现。
 - OIDC、ACL、RLS、数据出域策略、审计和安全测试尚未实现。
 - feedback、gap、claim、review、publish 知识进化闭环尚未实现。
@@ -164,7 +170,7 @@
 
 ## 4. 下一步要做的事情
 
-当前恢复问题集的自动评测，人工证据复核仍暂停；按照以下顺序推进 Phase 0B：
+单仓 Phase 0B 工程路径已经验证，人工证据复核仍暂停；按照以下顺序继续推进：
 
 | 顺序 | 要做的事情 | 负责人 | 具体产出 | 完成判断 |
 | --- | --- | --- | --- | --- |
@@ -180,11 +186,12 @@
 | 10 | 实现 PostgreSQL read/write adapter | Codex | Context Pack read、分批写入、计数校验、原子发布、回滚 | 已完成，GitHub Actions PostgreSQL 17 上 25/25 测试通过 |
 | 11 | 接入 Zoekt 正式 lexical adapter | Codex | immutable export、预构建 Zoekt index job、provider adapter、FTS fallback、live CI | 已完成，29/29 测试通过，run `30753488893` |
 | 12 | 恢复评测问题集 | Codex | 自动评测 runner、FTS/RRF 对比、失败分类；人工复核继续暂停 | 已完成：hybrid Range Recall@10 `0.5926`、Range MRR `0.6833`，形成 vector 决策输入 |
-| 13 | 实验 vector/reranker | Codex | provider 边界、可缓存 embedding/score、与当前 hybrid 的消融报告 | 只有四项指标和实际问题均有可解释净增益才进入正式通道 |
+| 13 | 实验 vector/reranker | Codex | provider 边界、可缓存 embedding/score、与当前 hybrid 的消融报告 | 已完成：候选融合四项无回退；保留实验接口，按 ADR-0002 暂缓全量向量索引 |
+| 14 | 实现跨仓 solution snapshot | Codex | schema、固定成员版本、resolver、两阶段检索、partial visibility、跨仓 Context Pack | 2～4 仓 fixture 上版本组合准确、无越权泄露、结果可复现 |
 
 ### 现在立即要做的动作
 
-下一项开发工作是 vector/reranker 消融：复用同一 snapshot、问题集和经过严格校验的 lexical cache，以当前 hybrid 指标为无向量基线。先固定 provider/schema/缓存和失败回退，再评估模型；任何模型只有相对 File/Range Recall 与 MRR 取得可解释、可复现的净增益且延迟/资源可接受才保留。若没有增益，正式通道保持无向量，而不是为了符合预设架构强行启用模型。
+下一项开发工作是跨仓 solution snapshot：先扩展领域 schema，显式保存 solution、不可变 solution snapshot 和 repository snapshot member；再让 scope resolver 只返回 manifest 固定版本，随后实现两阶段仓库路由、统一检索和 partial visibility。首个自动 fixture 至少包含两个仓库，并验证隐藏其中一个仓库时不会泄露名称、版本、候选统计或正文。全过程继续遵守 source-only，不编译任何目标仓库。
 
 ## 相关文档
 
@@ -200,3 +207,6 @@
 - [Zoekt source-only 索引与检索适配器](zoekt-adapter.md)
 - [Linux 6.18.40 全树 source-only 验证](full-tree-validation.md)
 - [结构化检索自动评测报告](../evals/reports/linux-6.18.40-structured.md)
+- [Qwen3 语义候选重排消融](semantic-ablation.md)
+- [语义候选重排自动报告](../evals/reports/linux-6.18.40-semantic-qwen3-512.md)
+- [ADR-0002：保留语义候选重排，暂不启用全仓向量索引](decisions/0002-semantic-candidate-reranking.md)

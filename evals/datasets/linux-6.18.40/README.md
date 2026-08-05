@@ -98,4 +98,6 @@ python -m aikb structured `
 
 当前无向量 hybrid 基线的 File Recall@10 为 `0.7222`、Evidence Range Recall@10 为 `0.5926`、File MRR 为 `0.8500`、Range MRR 为 `0.6833`。逐题结果见 `evals/reports/linux-6.18.40-structured.md`。
 
+Top-100 hybrid 候选经过固定 Qwen3-Embedding-0.6B 语义融合后，File/Range Recall@10 为 `0.7778`/`0.6296`、File/Range MRR 为 `0.9000`/`0.8000`。逐题结果见 `evals/reports/linux-6.18.40-semantic-qwen3-512.md`；该结果只接受为实验 provider 证据，不把 draft 数据升级为黄金集，也不据此启用全量向量索引。
+
 按照用户决定，人工证据复核、扩充到 30～50 题和负样本目前继续暂停；现有 10 题和 draft evidence 只作为自动回归与技术决策输入，不删除也不冒充冻结黄金集。

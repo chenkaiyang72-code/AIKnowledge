@@ -116,4 +116,4 @@ python -m aikb structured `
   --top-k 10
 ```
 
-完整逐题结果见 [结构化检索自动评测报告](../evals/reports/linux-6.18.40-structured.md)。下一步以当前 hybrid 结果作为无向量基线，只允许能在相同 snapshot 和问题集上提供可复现增益的 vector/reranker 进入正式通道。
+完整逐题结果见 [结构化检索自动评测报告](../evals/reports/linux-6.18.40-structured.md)。后续 Qwen3 消融已经证明有界候选语义融合存在增益，但当前数据不足以启用全量向量召回；结论见[语义消融](semantic-ablation.md)与 [ADR-0002](decisions/0002-semantic-candidate-reranking.md)。

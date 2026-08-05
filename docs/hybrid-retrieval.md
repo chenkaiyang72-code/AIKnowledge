@@ -64,8 +64,10 @@ FTS5 只用于 `MATCH`。symbol/relation 通道不再用 `chunk_id` 等值扫描
 
 SQLite FTS 在 397 万 chunk 上完成 10 题 BM25 全局排序约需 605 秒，只承担离线 baseline。评测器支持严格校验的 lexical cache，后续只调整 symbol/relation/vector/reranker 时可把同一 snapshot 的下游消融缩短到秒级；正式线上 lexical 仍使用 Zoekt。
 
+Top-100 深候选和 Qwen3-Embedding-0.6B 语义消融已经完成。candidate weight `1.0`、semantic weight `0.5` 的保守 RRF 在不降低 File MRR 的情况下，把 File/Range Recall@10 提高到 `0.7778`/`0.6296`，Range MRR 提高到 `0.8000`。接口和 cache 被保留为实验能力；由于数据仍是 10 题 draft evidence，semantic 尚未加入默认 Context Pack，也不启动全量向量索引。详见[语义消融](semantic-ablation.md)和 [ADR-0002](decisions/0002-semantic-candidate-reranking.md)。
+
 ## 下一步
 
 1. 已完成现有真实问题集的 FTS 与 symbol/relation RRF 全树自动对比。
-2. 接入 pgvector 实验通道，但只有相对当前无向量基线的 Evidence Recall@10/MRR 有可复现增益时才保留 embedding/reranker。
-3. 增加跨仓 solution snapshot 路由，使多个不可变 repository snapshot 进入同一检索 scope。
+2. 已完成有界候选语义重排实验；保留实验接口，暂不启用全量 pgvector 召回。
+3. 进入跨仓 solution snapshot 路由，使多个不可变 repository snapshot 进入同一检索 scope，并继续收集候选池外缺口。

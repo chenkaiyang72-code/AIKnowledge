@@ -371,7 +371,7 @@ MCP 上下文模式只能可靠记录检索 trace，通常看不到客户端最�
 | MCP | 官方 MCP Python SDK `mcp==1.28.0` + Streamable HTTP | 锁定已发布稳定线，避免 pre-release 协议变化影响客户端 | v2 GA tag 发布且 Cursor、Claude、VS Code 兼容测试通过后升级 |
 | 主数据库 | PostgreSQL 18 当前 minor | 事务、RLS、FTS、JSON、关系表统一 | 明确瓶颈后再拆；17 仍可作为兼容下限 |
 | 向量检索 | pgvector + 安全域分区 | 降低组件数，支持 HNSW 和混合检索 | 千万级 chunk 或独立扩缩容时评估 Qdrant |
-| 语义模型候选 | Qwen3-Embedding-0.6B + Qwen3-Reranker-0.6B | 可本地部署，覆盖代码和多语言；小模型适合先测成本收益 | 只有黄金集证明增益后进入 MVP；否则保留接口、不启用 |
+| 语义模型候选 | Qwen3-Embedding-0.6B | 已验证可本地部署并覆盖代码/多语言；先对 Top-100 hybrid 候选重排 | provider/cache 已保留；黄金集达标前不启用全量向量召回，暂不增加独立 reranker 模型 |
 | 精确检索 | ripgrep 评测 baseline；Zoekt 正式通道 | baseline 简单可复现；Zoekt 面向代码提供 trigram、正则、符号信号和多仓搜索 | Zoekt 无法满足 ACL 后过滤召回或运维要求时重新评估 |
 | 语法解析 | Tree-sitter | 多语言、增量、适合结构化切块 | 保持为通用 fallback |
 | 源码关系索引 | Tree-sitter + 自研标识符/include/Kconfig/Kbuild 提取器 | 无需编译即可覆盖大仓和快速更新；所有推断关系显式携带置信度 | 黄金集证明需要时增加新的 source-only parser |
@@ -383,7 +383,7 @@ MCP 上下文模式只能可靠记录检索 trace，通常看不到客户端最�
 | 可观测性 | OpenTelemetry + Prometheus/Grafana | 统一追踪检索和索引质量 | 从第一版保留 trace_id |
 | 部署 | Docker Compose | 单机可快速验证 | 多团队、高可用后迁移 Kubernetes |
 
-Embedding、reranker 和生成模型通过 provider interface 配置，不写死供应商。Qwen3-Embedding-0.6B 与 Qwen3-Reranker-0.6B 只是首轮本地候选，必须先用真实内核问题证明质量收益；模型更换时通过 `model_id + dimension + version` 并行重建索引，禁止原地混用不同 embedding。首版依赖显式锁定 `mcp==1.28.0`；只有 MCP v2 发布 GA tag 且 Cursor、Claude、VS Code 兼容矩阵验证通过后才升级。
+Embedding、reranker 和生成模型通过 provider interface 配置，不写死供应商。首轮 Qwen3-Embedding-0.6B 有界候选消融取得 Recall/MRR 净增益，已保留 provider、内容寻址 cache 和离线评测；由于问题仍未形成黄金集且全量索引成本高，默认 Context Pack 不启用 semantic，也不增加 Qwen3-Reranker。模型更换时通过 `provider + model + revision + weights hash + dimension + max length + instruction/template` 分隔缓存和并行重建索引，禁止原地混用不同 embedding。首版依赖显式锁定 `mcp==1.28.0`；只有 MCP v2 发布 GA tag 且 Cursor、Claude、VS Code 兼容矩阵验证通过后才升级。
 
 ## 11. 可复用的开源项目
 
@@ -394,7 +394,7 @@ Embedding、reranker 和生成模型通过 provider interface 配置，不写死
 | scip-clang | C3 对照方案 | 记录其编译数据库依赖与精度边界 | 与“禁止依赖编译”的约束冲突，不采用 |
 | [Zoekt](https://github.com/sourcegraph/zoekt) | C4 Lexical Search、C7 Retrieval | 建正式 trigram 代码索引，通过内部 JSON/gRPC adapter 查询 | Phase 0B 直接依赖；不承担权限和知识治理 |
 | [pgvector](https://github.com/pgvector/pgvector) | C5 Semantic Index、C6 Store | 保存 embedding 并参与混合检索 | 直接依赖 |
-| [Qwen3 Embedding](https://github.com/QwenLM/Qwen3-Embedding) | C5 Semantic Index | 0.6B embedding/reranker 作为本地评测候选 | 条件依赖；黄金集达标后启用 |
+| [Qwen3 Embedding](https://github.com/QwenLM/Qwen3-Embedding) | C5 Semantic Index | 固定 0.6B embedding revision 对深候选做本地重排 | 实验 adapter 已实现；全仓 embedding 与独立 reranker 延后 |
 | [MCP SDK](https://github.com/modelcontextprotocol/python-sdk) | C9 MCP Gateway | 实现标准 tools/resources 和 Streamable HTTP | 直接依赖，首版锁定 `1.28.0` |
 | [Keycloak](https://www.keycloak.org/) | C10 Identity/Policy | 没有企业 IdP 时提供 OIDC 测试与试点身份源 | 条件依赖；不替代仓库 ACL |
 | [Tabby](https://github.com/TabbyML/tabby) | 产品参考 | 比较 Answer Engine 和仓库上下文体验 | 仅参考/对照，不 fork、不作为运行依赖 |
@@ -530,7 +530,7 @@ AIKnowledge/
 
 ## 16. 下一步
 
-当前已经完成固定版本、ripgrep baseline、Tree-sitter、source-only 关系、blob 分析缓存、一层有界依赖扩展、Context Pack v1.2、SQLite/PostgreSQL provider、原子 snapshot publisher，以及 Zoekt/精确 symbol/有限关系扩展的确定性 RRF。下一步用现有问题集自动恢复 Evidence Recall@K/MRR 对比，以消融结果决定 pgvector embedding/reranker 是否保留；随后进入跨仓 solution snapshot 和 MCP。人工证据复核仍可暂停，不影响自动评测。架构约束见 [ADR-0001](decisions/0001-source-only-indexing.md)，组件映射和任务见技术蓝图及实施计划。
+当前已经完成 Linux 6.18.40 全树 source-only snapshot、结构化关系与缓存、Context Pack v1.2、SQLite/PostgreSQL publisher、Zoekt 和 lexical/symbol/relation RRF，并完成固定 Qwen3 模型的 Top-100 候选语义消融。依据 [ADR-0002](decisions/0002-semantic-candidate-reranking.md)，保留语义实验接口但暂不启用全量向量索引。下一步进入跨仓 solution snapshot、两阶段 repository routing 和跨仓 Context Pack；随后实现只读 MCP。人工证据复核仍可暂停，但 semantic 正式启用门槛不会因此降低。source-only 约束见 [ADR-0001](decisions/0001-source-only-indexing.md)，组件映射和任务见技术蓝图及实施计划。
 
 ## 17. 调研依据
 

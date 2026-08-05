@@ -122,7 +122,7 @@
 | TRACE-001 | 记录 query、scope、召回项、分数和耗时 | retrieval trace |
 | EVAL-006 | 比较四组检索方案 | 对比报告 |
 | EVAL-007 | 执行 citation、unknown 和版本测试 | 质量报告 |
-| ADR-001 | 根据数据决定 Qwen3 embedding/reranker 是否达到启用门槛 | ADR 文档 |
+| ADR-001 | 根据数据决定 Qwen3 embedding/reranker 是否达到启用门槛 | 已完成：[ADR-0002](decisions/0002-semantic-candidate-reranking.md)，保留候选重排、暂缓全量向量索引 |
 
 ### 验收门槛
 
@@ -243,7 +243,7 @@
 
 | ADR | 决策问题 | 最迟完成时间 |
 | --- | --- | --- |
-| ADR-001 | Qwen3 embedding/reranker 是否达到进入 MVP 的收益门槛 | Phase 0B 结束 |
+| ADR-001 | Qwen3 embedding/reranker 是否达到进入 MVP 的收益门槛 | 已完成：[ADR-0002](decisions/0002-semantic-candidate-reranking.md) |
 | ADR-002 | Context Pack v1 schema 和兼容策略 | Phase 0B 结束 |
 | ADR-003 | symbol identity 与 citation re-anchor 算法 | Phase 0B 第 2 周 |
 | ADR-004 | solution snapshot 来源与版本选择策略 | Phase 0C 第 1 周 |
