@@ -530,7 +530,7 @@ AIKnowledge/
 
 ## 16. 下一步
 
-当前已经完成 Linux 6.18.40 全树 source-only snapshot、结构化关系与缓存、SQLite/PostgreSQL publisher、Zoekt、lexical/symbol/relation RRF，以及固定 Qwen3 模型的 Top-100 候选语义消融。跨仓 Phase 0C 已实现不可变 solution snapshot、2～4 仓高召回路由基线、Context Pack v1.3、跨仓 source-inferred link 和 PoC partial visibility；10 个双仓 fixture 问题的 routing recall 与版本组合准确率均为 `1.0`。只读 MCP 已实现三个窄工具、stdio 与 Stateless Streamable HTTP，Claude Code 真实 stdio 客户端已连接成功；Phase 1B 的 principal/team/repository grant、非 owner RLS 已通过真实 PostgreSQL CI，OIDC/JWKS、RFC 9728 和 metadata-only audit 已完成本地实现。依据 [ADR-0002](decisions/0002-semantic-candidate-reranking.md)，保留语义实验接口但暂不启用全量向量索引。下一步完成共享认证 CI、真实 IdP/客户端联调和 Cursor UI 验收。人工证据复核仍可暂停，但 semantic 与真实跨仓验收门槛不会因此降低。source-only 约束见 [ADR-0001](decisions/0001-source-only-indexing.md)，跨仓实现见[solution snapshot 文档](cross-repo-solution.md)，权限设计见[团队安全文档](team-security.md)，组件映射和任务见技术蓝图及实施计划。
+当前已经完成 Linux 6.18.40 全树 source-only snapshot、结构化关系与缓存、SQLite/PostgreSQL publisher、Zoekt、lexical/symbol/relation RRF，以及固定 Qwen3 模型的 Top-100 候选语义消融。跨仓 Phase 0C 已实现不可变 solution snapshot、2～4 仓高召回路由基线、Context Pack v1.3、跨仓 source-inferred link 和 PoC partial visibility；10 个双仓 fixture 问题的 routing recall 与版本组合准确率均为 `1.0`。只读 MCP 已实现三个窄工具、stdio 与 Stateless Streamable HTTP，Claude Code 真实 stdio 客户端已连接成功；Phase 1B 的 principal/team/repository grant、非 owner RLS、OIDC/JWKS、RFC 9728 和 metadata-only audit 已通过真实 PostgreSQL CI，原子增量 security manifest CLI 已完成本地实现。依据 [ADR-0002](decisions/0002-semantic-candidate-reranking.md)，保留语义实验接口但暂不启用全量向量索引。下一步终验安全管理 CLI，并完成真实 IdP/客户端联调和 Cursor UI 验收。人工证据复核仍可暂停，但 semantic 与真实跨仓验收门槛不会因此降低。source-only 约束见 [ADR-0001](decisions/0001-source-only-indexing.md)，跨仓实现见[solution snapshot 文档](cross-repo-solution.md)，权限设计见[团队安全文档](team-security.md)，组件映射和任务见技术蓝图及实施计划。
 
 ## 17. 调研依据
 

@@ -130,6 +130,6 @@ GitHub Actions 使用 PostgreSQL 17 pgvector service 执行这组测试。本地
 
 - scanner 当前仍先写本地 SQLite 再显式 publish；后台 index orchestrator、队列重试和自动发布尚未实现。
 - PostgreSQL lexical 仍是 bootstrap/故障回退；Zoekt adapter 已实现，但团队环境的常驻 Zoekt 部署与运维尚未完成。
-- organization/team/repository grant 与 RLS 已在真实 PostgreSQL 通过；schema v5 OIDC directory、token 撤销和 MCP audit 等待本次共享 CI 终验。
+- organization/team/repository grant、RLS、schema v5 OIDC directory、token 撤销和 MCP audit 已在真实 PostgreSQL 通过 57/57 终验，见 [run 31049508639](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31049508639)。security manifest 管理器已完成本地测试，等待下一次共享 CI。
 - vector adapter、模型选择和 ANN index 尚未实现。
 - 生产备份、连接池、分区和数据保留策略尚未验证。

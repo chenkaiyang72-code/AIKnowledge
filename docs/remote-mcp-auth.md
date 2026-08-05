@@ -51,10 +51,10 @@ INSERT INTO repository_grant(
 );
 ```
 
-生产环境后续使用 security admin API/CLI 或 GitHub/GitLab ACL 同步，不把 SQL 权限交给普通用户。要立即撤销该 principal 现有 token：
+生产环境使用版本化 security manifest 或后续 GitHub/GitLab ACL 同步，不把 SQL 权限交给普通用户。完整方式见[安全管理文档](security-admin.md)。要立即撤销该 principal 现有 token：
 
-```sql
-UPDATE principal SET tokens_valid_after=now() WHERE id='principal_alice';
+```powershell
+python -m aikb kb-security-revoke-tokens --principal-id principal_alice
 ```
 
 ## 启动远程服务

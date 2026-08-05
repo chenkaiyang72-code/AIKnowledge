@@ -211,6 +211,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     publish_parser.add_argument("--batch-size", type=int, default=1_000)
 
+    security_apply_parser = subparsers.add_parser(
+        "kb-security-apply",
+        help="atomically apply an additive team security manifest",
+    )
+    security_apply_parser.add_argument("--manifest", type=Path, required=True)
+    security_apply_parser.add_argument(
+        "--postgres-admin-url",
+        help=(
+            "owner/admin SQLAlchemy URL; prefer "
+            "AIKB_SECURITY_ADMIN_POSTGRES_URL"
+        ),
+    )
+    security_apply_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="run all database validation and roll back",
+    )
+
+    security_revoke_parser = subparsers.add_parser(
+        "kb-security-revoke-tokens",
+        help="invalidate all existing tokens for one principal",
+    )
+    security_revoke_parser.add_argument("--principal-id", required=True)
+    security_revoke_parser.add_argument(
+        "--postgres-admin-url",
+        help=(
+            "owner/admin SQLAlchemy URL; prefer "
+            "AIKB_SECURITY_ADMIN_POSTGRES_URL"
+        ),
+    )
+
     subparsers.add_parser(
         "kb-context-schema",
         help="print the generated JSON Schema for Context Pack v1",
@@ -223,6 +254,44 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "kb-context-schema":
             print(json.dumps(context_pack_json_schema(), ensure_ascii=False, indent=2))
+            return 0
+        if args.command in {
+            "kb-security-apply",
+            "kb-security-revoke-tokens",
+        }:
+            postgres_url = args.postgres_admin_url or os.environ.get(
+                "AIKB_SECURITY_ADMIN_POSTGRES_URL"
+            )
+            if not postgres_url:
+                raise ValueError(
+                    "set AIKB_SECURITY_ADMIN_POSTGRES_URL or pass "
+                    "--postgres-admin-url"
+                )
+            try:
+                from sqlalchemy import create_engine
+
+                from aikb.security_admin import (
+                    PostgresSecurityAdmin,
+                    load_security_manifest,
+                )
+            except ImportError as error:
+                raise RuntimeError(
+                    "PostgreSQL support is not installed; run "
+                    "python -m pip install -e \".[postgres]\""
+                ) from error
+            engine = create_engine(postgres_url, pool_pre_ping=True)
+            try:
+                admin = PostgresSecurityAdmin(engine)
+                if args.command == "kb-security-apply":
+                    report = admin.apply(
+                        load_security_manifest(args.manifest),
+                        dry_run=args.dry_run,
+                    ).as_dict()
+                else:
+                    report = admin.revoke_tokens(args.principal_id)
+            finally:
+                engine.dispose()
+            print(json.dumps(report, ensure_ascii=False, indent=2))
             return 0
         with Catalog(args.db) as catalog:
             catalog.initialize()

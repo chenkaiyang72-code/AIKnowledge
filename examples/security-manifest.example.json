@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "domain": {
+    "id": "domain-kernel-platform",
+    "name": "Kernel Platform",
+    "data_policy": {
+      "source_export": "internal-only"
+    }
+  },
+  "principals": [
+    {
+      "id": "principal-alice",
+      "issuer": "https://id.example.com",
+      "subject": "oidc-subject-from-idp",
+      "display_name": "Alice"
+    }
+  ],
+  "teams": [
+    {
+      "id": "team-kernel",
+      "name": "Kernel"
+    }
+  ],
+  "memberships": [
+    {
+      "team_id": "team-kernel",
+      "principal_id": "principal-alice",
+      "role": "maintainer",
+      "active": true
+    }
+  ],
+  "repository_grants": [
+    {
+      "repository_id": "replace-with-indexed-repository-id",
+      "team_id": "team-kernel",
+      "permission": "read",
+      "active": true
+    }
+  ]
+}

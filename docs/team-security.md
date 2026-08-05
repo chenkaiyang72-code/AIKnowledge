@@ -52,4 +52,4 @@ SELECT set_config('aikb.security_domain_id', :security_domain_id, true);
 
 集成测试使用真正的非 owner `aikb_reader`，建立 Alice/team 与 Bob/direct grant：Alice 只能看到 visible repository/chunk/solution member，Bob 只能看到 hidden 一侧，错误 domain 得到零行；同一测试还验证 secured `PostgresCatalog`、solution partial visibility 和只允许 principal 写自己的 retrieval trace。
 
-OIDC verifier、JWT audience/scope/expiry/not-before/revocation、MCP 401/Protected Resource Metadata 与 metadata-only audit 已完成本地工程实现，等待共享 PostgreSQL CI 终验。部署方式见[远程 MCP 文档](remote-mcp-auth.md)。
+OIDC verifier、JWT audience/scope/expiry/not-before/revocation、MCP 401/Protected Resource Metadata 与 metadata-only audit 已在共享 PostgreSQL CI 完成 57/57 终验，见 [run 31049508639](https://github.com/chenkaiyang72-code/AIKnowledge/actions/runs/31049508639)。domain/principal/team/grant 由原子、增量、无隐式删除的 security manifest 管理，见[安全管理文档](security-admin.md)；远程部署方式见[远程 MCP 文档](remote-mcp-auth.md)。

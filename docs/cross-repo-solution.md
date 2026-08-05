@@ -106,7 +106,7 @@ PostgreSQL 端到端用例已在 GitHub Actions 的 PostgreSQL 17 + pgvector 服
 
 ## 当前边界
 
-- PoC visibility 过滤已经证明 builder 不查询或输出隐藏成员；principal/team grant 和 PostgreSQL 非 owner RLS 已通过共享数据库终验。OIDC/JWKS 与 metadata-only audit 已完成本地实现，仍需共享 CI、真实 IdP 联调和 ACL 自动同步。
+- PoC visibility 过滤已经证明 builder 不查询或输出隐藏成员；principal/team grant、PostgreSQL 非 owner RLS、OIDC/JWKS 与 metadata-only audit 已通过共享数据库终验。仍需真实 IdP/客户端联调和 ACL 自动同步。
 - 当前仓库路由为 2～4 仓高召回基线；尚未为几十或几百仓实现选择性路由与性能基准。
 - 跨仓链接只覆盖查询命中的源码符号关系；manifest、IDL、API schema 和外部 symbol map 的离线跨仓边仍待扩展。
 - 自动 fixture 证明工程契约，不替代团队真实跨仓问题的人工黄金证据复核。
