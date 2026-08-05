@@ -24,7 +24,7 @@ $env:AIKB_POSTGRES_URL = "postgresql+psycopg://migration-user@db.example/aikb"
 python -m alembic upgrade head
 ```
 
-schema v5 增加 `tokens_valid_after`、NOLOGIN `aikb_authenticator` 和 `mcp_audit_event`。生产 service login 由 DBA 单独创建，它不能拥有表：
+schema v5 增加 `tokens_valid_after`、NOLOGIN `aikb_authenticator` 和 `mcp_audit_event`；schema v6 增加独立 grant source。生产 service login 由 DBA 单独创建，它不能拥有表：
 
 ```sql
 CREATE ROLE aikb_service LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
@@ -35,23 +35,7 @@ migration/publisher credential 与 `aikb_service` 必须分开。MCP 的 `--post
 
 ## principal 与授权
 
-OIDC 身份以 issuer + subject 唯一映射，示意初始化由受控 admin transaction 完成：
-
-```sql
-INSERT INTO security_domain(id,name) VALUES ('domain_kernel','kernel-team');
-INSERT INTO principal(
-  id,security_domain_id,issuer,subject,display_name
-) VALUES (
-  'principal_alice','domain_kernel','https://idp.example','oidc-subject','Alice'
-);
-INSERT INTO repository_grant(
-  id,security_domain_id,repository_id,principal_id,permission
-) VALUES (
-  'grant_alice_linux','domain_kernel','repo_linux','principal_alice','read'
-);
-```
-
-生产环境使用版本化 security manifest 或后续 GitHub/GitLab ACL 同步，不把 SQL 权限交给普通用户。完整方式见[安全管理文档](security-admin.md)。要立即撤销该 principal 现有 token：
+OIDC 身份以 issuer + subject 唯一映射。生产环境必须使用版本化 security manifest 或后续 GitHub/GitLab ACL 同步，不直接插 grant 父表，也不把 SQL 权限交给普通用户；schema v6 中没有有效 source 的 grant 不产生访问权。完整方式见[安全管理文档](security-admin.md)。要立即撤销该 principal 现有 token：
 
 ```powershell
 python -m aikb kb-security-revoke-tokens --principal-id principal_alice

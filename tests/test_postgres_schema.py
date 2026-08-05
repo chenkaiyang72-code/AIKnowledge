@@ -59,6 +59,7 @@ EXPECTED_TABLES = {
     "security_team",
     "security_team_member",
     "repository_grant",
+    "repository_grant_source",
     "mcp_audit_event",
 }
 
@@ -109,6 +110,93 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.engine.dispose()
 
+    def test_legacy_v5_grant_is_backfilled_without_losing_visibility(self) -> None:
+        from alembic import command
+
+        suffix = uuid.uuid4().hex
+        domain_id = f"domain_legacy_{suffix}"
+        principal_id = f"principal_legacy_{suffix}"
+        repository_id = f"repo_legacy_{suffix}"
+        repository_name = f"legacy-{suffix}"
+        grant_id = f"grant_legacy_{suffix}"
+        command.downgrade(self.config, "0005_oidc_principal_directory")
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("INSERT INTO security_domain(id,name) VALUES (:id,:name)"),
+                    {"id": domain_id, "name": f"Legacy {suffix}"},
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO principal(id,security_domain_id,issuer,subject) "
+                        "VALUES (:id,:domain,'https://issuer.example',:subject)"
+                    ),
+                    {
+                        "id": principal_id,
+                        "domain": domain_id,
+                        "subject": f"legacy-{suffix}",
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO repository(id,name,source_kind,source_uri) "
+                        "VALUES (:id,:name,'test','test://legacy')"
+                    ),
+                    {"id": repository_id, "name": repository_name},
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO repository_grant(id,security_domain_id,"
+                        "repository_id,principal_id,permission) VALUES "
+                        "(:id,:domain,:repository,:principal,'read')"
+                    ),
+                    {
+                        "id": grant_id,
+                        "domain": domain_id,
+                        "repository": repository_id,
+                        "principal": principal_id,
+                    },
+                )
+            command.upgrade(self.config, "head")
+            with self.engine.connect() as connection:
+                transaction = connection.begin()
+                source = connection.execute(
+                    text(
+                        "SELECT source_kind,source_key,permission,revoked_at "
+                        "FROM repository_grant_source "
+                        "WHERE repository_grant_id=:grant"
+                    ),
+                    {"grant": grant_id},
+                ).one()
+                connection.execute(text("SET LOCAL ROLE aikb_reader"))
+                connection.execute(
+                    text("SELECT set_config('aikb.principal_id',:value,true)"),
+                    {"value": principal_id},
+                )
+                connection.execute(
+                    text(
+                        "SELECT set_config('aikb.security_domain_id',:value,true)"
+                    ),
+                    {"value": domain_id},
+                )
+                visible = connection.execute(
+                    text("SELECT name FROM repository")
+                ).scalars().all()
+                transaction.rollback()
+            self.assertEqual(tuple(source), ("legacy", grant_id, "read", None))
+            self.assertEqual(visible, [repository_name])
+        finally:
+            command.upgrade(self.config, "head")
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("DELETE FROM security_domain WHERE id=:id"),
+                    {"id": domain_id},
+                )
+                connection.execute(
+                    text("DELETE FROM repository WHERE id=:id"),
+                    {"id": repository_id},
+                )
+
     def test_migration_is_current_and_pgvector_is_available(self) -> None:
         inspector = inspect(self.engine)
         self.assertTrue(EXPECTED_TABLES.issubset(set(inspector.get_table_names())))
@@ -122,7 +210,7 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             extension = connection.execute(
                 text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             ).scalar_one()
-        self.assertEqual(version, "5")
+        self.assertEqual(version, "6")
         self.assertTrue(extension)
         self.assertIn("content", {column["name"] for column in inspector.get_columns("chunk")})
         self.assertIn(
@@ -313,6 +401,20 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
                     "domain": domain_id,
                     "repository": hidden_repository_id,
                     "principal": bob_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO repository_grant_source(id,repository_grant_id,"
+                    "source_kind,source_key,permission) VALUES "
+                    "(:team_source,:team_grant,'manual','integration-test','read'),"
+                    "(:bob_source,:bob_grant,'manual','integration-test','read')"
+                ),
+                {
+                    "team_source": f"grant_source_team_{suffix}",
+                    "team_grant": f"grant_team_{suffix}",
+                    "bob_source": f"grant_source_bob_{suffix}",
+                    "bob_grant": f"grant_bob_{suffix}",
                 },
             )
 

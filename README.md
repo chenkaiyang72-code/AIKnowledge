@@ -31,6 +31,7 @@
 - [ADR-0004：principal、团队授权与 RLS](docs/decisions/0004-principal-acl-rls.md)
 - [远程 MCP：OIDC、RLS 与审计](docs/remote-mcp-auth.md)
 - [ADR-0005：远程 MCP 作为 OIDC Resource Server](docs/decisions/0005-oidc-resource-server.md)
+- [ADR-0006：仓库授权主体与授权来源分离](docs/decisions/0006-grant-source-provenance.md)
 
 首版技术路线：Python 模块化单体与独立 worker，使用 PostgreSQL/pgvector 保存元数据和向量，使用 Tree-sitter、源码标识符/关系提取器和 Zoekt 建立无需编译的代码索引，并通过只读 MCP 网关向不同 AI 客户端提供带版本和引用的 Context Pack。
 

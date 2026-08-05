@@ -4,12 +4,12 @@
 
 ## 为什么先只读
 
-GitHub collaborator API 返回用户综合组织、团队、直接授权和 enterprise 后的最高生效权限，当前无法指出权限来自哪个来源。AIKnowledge schema v5 也还没有 grant provenance。此时自动撤销会把人工授权误当作 GitHub 托管授权，因此：
+GitHub collaborator API 返回用户综合组织、团队、直接授权和 enterprise 后的最高生效权限，当前无法指出权限来自哪个来源。AIKnowledge schema v6 已把 grant identity 与独立 source 分开，但 connector 尚未持久化同步游标、完整观察 revision 和 apply audit。此时自动撤销仍不安全，因此：
 
 - GitHub 中存在、已绑定 principal 且本地缺失/失效/权限不同：进入 `activate_or_update`；
 - GitHub 中存在但没有 numeric user ID binding：进入 `unmatched_collaborators`；
 - binding 中存在但 GitHub 当前不存在：进入 `stale_bindings`；
-- 本地 active direct grant 未出现在已绑定 collaborators 中：只进入带 `requires_review: true` 的 `revoke_candidates`；
+- 本地 effective direct grant 未出现在已绑定 collaborators 中：只进入带 `active_source_kinds` 和 `requires_review: true` 的 `revoke_candidates`；
 - 命令没有 apply 选项，所有数据库查询都在只读连接路径完成。
 
 GitHub numeric user ID 用于绑定，不用可改名的 login；login 只出现在未绑定差异中帮助管理员识别。
@@ -50,4 +50,4 @@ python -m aikb kb-github-acl-plan `
   --snapshot path/to/reviewed-snapshot.json
 ```
 
-ACL snapshot 和计划包含团队成员身份元数据，应按内部权限文件管理，不能进入公共日志。下一版只有在 grant 增加明确 source/provenance、同步游标和回滚审计后，才会提供受控 apply。
+ACL snapshot 和计划包含团队成员身份元数据，应按内部权限文件管理，不能进入公共日志。schema v6 grant source 已落地；下一版只有在 connector 同步游标、完整分页观察标志、apply audit 和回滚流程完成后，才会提供 source-scoped 受控 apply。

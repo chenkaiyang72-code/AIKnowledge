@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "grant_source_key": "kernel-platform-manifest",
   "domain": {
     "id": "domain-kernel-platform",
     "name": "Kernel Platform",

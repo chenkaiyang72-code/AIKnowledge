@@ -185,6 +185,20 @@ class GitHubACLPlannerIntegrationTests(unittest.TestCase):
                     "stale_principal": principal_stale,
                 },
             )
+            connection.execute(
+                text(
+                    "INSERT INTO repository_grant_source(id,repository_grant_id,"
+                    "source_kind,source_key,permission) VALUES "
+                    "(:read_source,:read_grant,'manual','integration-test','read'),"
+                    "(:stale_source,:stale_grant,'manual','integration-test','admin')"
+                ),
+                {
+                    "read_source": f"source_read_{suffix}",
+                    "read_grant": f"grant_read_{suffix}",
+                    "stale_source": f"source_stale_{suffix}",
+                    "stale_grant": f"grant_stale_{suffix}",
+                },
+            )
         try:
             config = GitHubACLPlanConfig.model_validate(
                 {
@@ -224,6 +238,10 @@ class GitHubACLPlannerIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(plan.revoke_candidates[0]["principal_id"], principal_stale)
             self.assertTrue(plan.revoke_candidates[0]["requires_review"])
+            self.assertEqual(
+                plan.revoke_candidates[0]["active_source_kinds"],
+                ["manual"],
+            )
             self.assertEqual(plan.unmatched_collaborators[0]["github_user_id"], 99)
             self.assertEqual(plan.stale_bindings[0]["github_user_id"], 3)
             with self.engine.connect() as connection:

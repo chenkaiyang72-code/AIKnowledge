@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from aikb.postgres_schema_v1 import NAMING_CONVENTION
 
 
-POSTGRES_SECURITY_SCHEMA_VERSION = 4
+POSTGRES_SECURITY_SCHEMA_VERSION = 6
 security_metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 # This lightweight declaration lets the migration-owned metadata compile the
@@ -146,4 +146,46 @@ Index(
     "ix_repository_grant_repository_domain",
     repository_grant.c.repository_id,
     repository_grant.c.security_domain_id,
+)
+
+repository_grant_source = Table(
+    "repository_grant_source",
+    security_metadata,
+    Column("id", String(64), primary_key=True),
+    Column(
+        "repository_grant_id",
+        String(64),
+        ForeignKey("repository_grant.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("source_kind", String(16), nullable=False),
+    Column("source_key", String(256), nullable=False),
+    Column("source_revision", Text),
+    Column("permission", String(16), nullable=False, server_default="read"),
+    Column("expires_at", DateTime(timezone=True)),
+    Column("revoked_at", DateTime(timezone=True)),
+    Column(
+        "last_observed_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint(
+        "source_kind IN ('legacy', 'manual', 'manifest', 'github', 'gitlab')",
+        name="source_kind",
+    ),
+    CheckConstraint("permission IN ('read', 'write', 'admin')", name="permission"),
+    UniqueConstraint(
+        "repository_grant_id",
+        "source_kind",
+        "source_key",
+        name="uq_repository_grant_source_identity",
+    ),
+)
+Index(
+    "ix_repository_grant_source_active",
+    repository_grant_source.c.repository_grant_id,
+    repository_grant_source.c.revoked_at,
+    repository_grant_source.c.expires_at,
 )

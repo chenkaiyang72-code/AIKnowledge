@@ -226,7 +226,7 @@
 | ID | 状态 | 已实现内容 | 仍需推进 |
 | --- | --- | --- | --- |
 | AUTH-002 | 工程完成、真实联调待办 | schema v5 identity/team、PyJWT/JWKS verifier、最小目录角色，以及原子增量 security manifest CLI/token revoke 已通过 61/61 共享 CI | 真实 IdP 联调 |
-| AUTH-003 | 只读规划完成、共享 CI 待办 | grant 到期/撤销；GitHub effective collaborator 抓取、numeric ID binding、direct grant diff 与人工撤销候选 | grant provenance、受控 apply、GitLab connector |
+| AUTH-003 | provenance 本地完成、共享 CI 待办 | GitHub effective ACL planner 已通过 65/65；schema v6 grant identity/source 分离、legacy backfill 与 source-scoped manifest revoke 已实现 | connector 游标/审计、受控 apply、GitLab connector |
 | AUTH-004 | 完成基础终验 | 非 owner `aikb_reader`、事务 principal/domain、16 类内容表 RLS、solution partial visibility；PostgreSQL CI 51/51 | 向量安全域性能基准 |
 | SEC-001 | 共享 CI 完成 | 固定算法 JWT/JWKS、issuer/audience/scope/time/revocation、HTTP 401 与 RFC 9728 metadata；57/57 通过 | 真实 IdP/客户端联调、opaque introspection 决策 |
 | SEC-004 | 部分完成 | 双 principal、错误 domain、隐藏 repository/chunk/solution member、JWT 负例和 metadata-only audit 已通过真实 CI | prompt injection 与恶意仓库套件 |

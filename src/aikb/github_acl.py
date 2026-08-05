@@ -328,8 +328,8 @@ class PostgresGitHubACLPlanner:
                     "WHERE key='postgres_schema_version'"
                 )
             ).scalar_one_or_none()
-            if version != "5":
-                raise ValueError("GitHub ACL planning requires PostgreSQL schema v5")
+            if version != "6":
+                raise ValueError("GitHub ACL planning requires PostgreSQL schema v6")
             domain = connection.execute(
                 text("SELECT id FROM security_domain WHERE id=:id"),
                 {"id": config.security_domain_id},
@@ -361,11 +361,20 @@ class PostgresGitHubACLPlanner:
                 row["principal_id"]: row
                 for row in connection.execute(
                     text(
-                        "SELECT id,principal_id,permission,revoked_at,expires_at,"
-                        "(revoked_at IS NULL AND "
-                        "(expires_at IS NULL OR expires_at>now())) AS active "
-                        "FROM repository_grant WHERE security_domain_id=:domain "
-                        "AND repository_id=:repository AND principal_id IS NOT NULL"
+                        "WITH sources AS (SELECT repository_grant_id,source_kind,"
+                        "permission,(revoked_at IS NULL AND (expires_at IS NULL OR "
+                        "expires_at>now())) AS active FROM repository_grant_source) "
+                        "SELECT g.id,g.principal_id,COALESCE(CASE max(CASE "
+                        "WHEN s.active THEN CASE s.permission WHEN 'admin' THEN 3 "
+                        "WHEN 'write' THEN 2 ELSE 1 END END) WHEN 3 THEN 'admin' "
+                        "WHEN 2 THEN 'write' WHEN 1 THEN 'read' END,'read') AS permission,"
+                        "COALESCE(bool_or(s.active),false) AS active,"
+                        "COALESCE(array_agg(DISTINCT s.source_kind) FILTER "
+                        "(WHERE s.active),ARRAY[]::varchar[]) AS active_source_kinds "
+                        "FROM repository_grant g LEFT JOIN sources s "
+                        "ON s.repository_grant_id=g.id WHERE "
+                        "g.security_domain_id=:domain AND g.repository_id=:repository "
+                        "AND g.principal_id IS NOT NULL GROUP BY g.id,g.principal_id"
                     ),
                     {
                         "domain": config.security_domain_id,
@@ -420,6 +429,7 @@ class PostgresGitHubACLPlanner:
                         "grant_id": row["id"],
                         "principal_id": principal_id,
                         "current_permission": row["permission"],
+                        "active_source_kinds": list(row["active_source_kinds"]),
                         "reason": "not_present_in_bound_github_collaborators",
                         "requires_review": True,
                     }

@@ -1,13 +1,13 @@
 # 团队身份与仓库授权管理
 
-`kb-security-apply` 把一份严格 JSON manifest 原子应用到 PostgreSQL schema v5。它负责 security domain、OIDC principal、team、membership 和 repository grant，不接触源码内容。
+`kb-security-apply` 把一份严格 JSON manifest 原子应用到 PostgreSQL schema v6。它负责 security domain、OIDC principal、team、membership 和 repository grant/source，不接触源码内容。
 
 ## 安全语义
 
 - manifest 是增量声明：出现的对象会创建或更新，未出现的对象保持不变，不做隐式删除；只有 membership 明确写 `active: false` 时才删除该关系，改回 `true` 可恢复；
 - principal 的 domain、OIDC issuer 和 subject 一旦建立就不可通过 manifest 改写，避免身份接管；
 - membership 和 grant 必须引用同一 security domain 中的对象；repository 必须已由发布流程建立；
-- grant 的 `active: false` 是显式撤销，重复应用不会反复改变撤销时间；`active: true` 可显式恢复；
+- 根级 `grant_source_key` 标识这份 manifest 的稳定授权来源；digest 写入 `source_revision`。grant 的 `active: false` 只撤销该 manifest source，其他 manual/GitHub/GitLab source 仍有效；`active: true` 可显式恢复；
 - 整份 manifest 在单事务内提交，任何交叉引用或唯一性错误都会整体回滚；
 - `--dry-run` 执行相同数据库校验后回滚；命令不打印连接串、issuer subject 或其他身份明细。
 

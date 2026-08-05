@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-PostgreSQL schema v4 增加五张身份/授权表，schema v5 再增加 token 撤销时间、认证目录角色和 MCP 审计表：
+PostgreSQL schema v4 增加身份/授权基础，schema v5 增加 token 撤销、认证目录角色和 MCP 审计，schema v6 将授权主体与授权来源分离：
 
 | 表 | 作用 |
 | --- | --- |
@@ -11,9 +11,10 @@ PostgreSQL schema v4 增加五张身份/授权表，schema v5 再增加 token �
 | `security_team` | domain 内的协作团队 |
 | `security_team_member` | principal 与 team 的成员关系 |
 | `repository_grant` | repository 对 principal 或 team 的带时效授权 |
+| `repository_grant_source` | manifest/manual/GitHub/GitLab 等可独立撤销的授权来源 |
 | `mcp_audit_event` | principal 隔离的 metadata-only tool 调用审计 |
 
-`repository_grant` 的 principal/team 必须二选一；撤销或过期 grant、暂停 principal/team/domain 均不会通过可见性函数。授权变化只影响后续查询事务，不复制源码、不重建 snapshot。
+`repository_grant` 的 principal/team 必须二选一；schema v6 的 RLS 只有在至少一个 `repository_grant_source` 未撤销且未过期时才放行。同一 grantee 的 manifest、manual、GitHub 或 GitLab 来源形成并集，撤销一个来源不影响其他来源；暂停 principal/team/domain 仍会阻断全部来源。授权变化只影响后续查询事务，不复制源码、不重建 snapshot。
 
 ## 查询前强制
 
@@ -38,7 +39,7 @@ SELECT set_config('aikb.security_domain_id', :security_domain_id, true);
 - solution、solution snapshot、事件和 member；
 - retrieval trace 的当前 principal/domain 读写隔离。
 
-`schema_metadata` 和 `embedding_model` 只包含全局 schema/model 元数据，可由 reader 读取。安全域、principal、team、membership 和 grant 表不授予 reader 直接查询权限；RLS 通过固定 search path 的 SECURITY DEFINER 函数做最小布尔判断。
+`schema_metadata` 和 `embedding_model` 只包含全局 schema/model 元数据，可由 reader 读取。安全域、principal、team、membership、grant 和 grant source 表不授予 reader 直接查询权限；RLS 通过固定 search path 的 SECURITY DEFINER 函数做最小布尔判断。
 
 ## 运维约束
 

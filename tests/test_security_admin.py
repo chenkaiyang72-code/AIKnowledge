@@ -143,11 +143,14 @@ class SecurityAdminIntegrationTests(unittest.TestCase):
                         "(SELECT count(*) FROM principal WHERE security_domain_id=:domain),"
                         "(SELECT count(*) FROM security_team WHERE security_domain_id=:domain),"
                         "(SELECT count(*) FROM repository_grant "
-                        " WHERE security_domain_id=:domain)"
+                        " WHERE security_domain_id=:domain),"
+                        "(SELECT count(*) FROM repository_grant_source gs "
+                        " JOIN repository_grant g ON g.id=gs.repository_grant_id "
+                        " WHERE g.security_domain_id=:domain)"
                     ),
                     {"domain": domain_id},
                 ).one()
-            self.assertEqual(tuple(counts), (1, 1, 1))
+            self.assertEqual(tuple(counts), (1, 1, 1, 1))
 
             def visible_repositories() -> list[str]:
                 with self.engine.connect() as connection:
@@ -187,19 +190,45 @@ class SecurityAdminIntegrationTests(unittest.TestCase):
             admin.apply(manifest)
             self.assertEqual(visible_repositories(), [repository_name])
 
-            revoked_payload = manifest.model_dump(mode="json")
-            revoked_payload["repository_grants"][0]["active"] = False
-            admin.apply(SecurityManifest.model_validate(revoked_payload))
-            self.assertEqual(visible_repositories(), [])
-            with self.engine.connect() as connection:
-                revoked_at = connection.execute(
+            with self.engine.begin() as connection:
+                grant_id = connection.execute(
                     text(
-                        "SELECT revoked_at FROM repository_grant "
+                        "SELECT id FROM repository_grant "
                         "WHERE security_domain_id=:domain"
                     ),
                     {"domain": domain_id},
                 ).scalar_one()
-            self.assertIsNotNone(revoked_at)
+                connection.execute(
+                    text(
+                        "INSERT INTO repository_grant_source(id,repository_grant_id,"
+                        "source_kind,source_key,permission) VALUES "
+                        "(:id,:grant,'manual','break-glass','read')"
+                    ),
+                    {"id": f"manual_source_{suffix}", "grant": grant_id},
+                )
+
+            revoked_payload = manifest.model_dump(mode="json")
+            revoked_payload["repository_grants"][0]["active"] = False
+            admin.apply(SecurityManifest.model_validate(revoked_payload))
+            self.assertEqual(visible_repositories(), [repository_name])
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE repository_grant_source SET revoked_at=now() "
+                        "WHERE repository_grant_id=:grant AND source_kind='manual'"
+                    ),
+                    {"grant": grant_id},
+                )
+            self.assertEqual(visible_repositories(), [])
+            with self.engine.connect() as connection:
+                revoked_sources = connection.execute(
+                    text(
+                        "SELECT count(*) FROM repository_grant_source "
+                        "WHERE repository_grant_id=:grant AND revoked_at IS NOT NULL"
+                    ),
+                    {"grant": grant_id},
+                ).scalar_one()
+            self.assertEqual(revoked_sources, 2)
 
             token_report = admin.revoke_tokens(principal_id)
             self.assertEqual(token_report["principal_id"], principal_id)

@@ -94,6 +94,10 @@ class RepositoryGrantSpec(_ManifestModel):
 
 class SecurityManifest(_ManifestModel):
     schema_version: Literal[1]
+    grant_source_key: str = Field(
+        default="security-manifest-v1",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+    )
     domain: SecurityDomainSpec
     principals: tuple[PrincipalSpec, ...] = ()
     teams: tuple[TeamSpec, ...] = ()
@@ -156,6 +160,7 @@ class SecurityApplyReport:
     schema_version: int
     manifest_digest: str
     security_domain_id: str
+    grant_source_key: str
     principal_count: int
     team_count: int
     membership_count: int
@@ -167,6 +172,7 @@ class SecurityApplyReport:
             "schema_version": self.schema_version,
             "manifest_digest": self.manifest_digest,
             "security_domain_id": self.security_domain_id,
+            "grant_source_key": self.grant_source_key,
             "principal_count": self.principal_count,
             "team_count": self.team_count,
             "membership_count": self.membership_count,
@@ -187,10 +193,11 @@ class PostgresSecurityAdmin:
         *,
         dry_run: bool = False,
     ) -> SecurityApplyReport:
+        manifest_digest = manifest.digest()
         with self.engine.connect() as connection:
             transaction = connection.begin()
             try:
-                self._require_schema_v5(connection)
+                self._require_schema_v6(connection)
                 self._upsert_domain(connection, manifest.domain)
                 for principal in manifest.principals:
                     self._upsert_principal(connection, manifest.domain.id, principal)
@@ -207,6 +214,8 @@ class PostgresSecurityAdmin:
                         connection,
                         manifest.domain.id,
                         grant,
+                        source_key=manifest.grant_source_key,
+                        source_revision=manifest_digest,
                     )
                 if dry_run:
                     transaction.rollback()
@@ -218,8 +227,9 @@ class PostgresSecurityAdmin:
                 raise
         return SecurityApplyReport(
             schema_version=manifest.schema_version,
-            manifest_digest=manifest.digest(),
+            manifest_digest=manifest_digest,
             security_domain_id=manifest.domain.id,
+            grant_source_key=manifest.grant_source_key,
             principal_count=len(manifest.principals),
             team_count=len(manifest.teams),
             membership_count=len(manifest.memberships),
@@ -231,7 +241,7 @@ class PostgresSecurityAdmin:
         if not principal_id or len(principal_id) > 64:
             raise ValueError("principal ID is invalid")
         with self.engine.begin() as connection:
-            self._require_schema_v5(connection)
+            self._require_schema_v6(connection)
             row = connection.execute(
                 text(
                     "UPDATE principal SET tokens_valid_after="
@@ -249,15 +259,15 @@ class PostgresSecurityAdmin:
         }
 
     @staticmethod
-    def _require_schema_v5(connection: Any) -> None:
+    def _require_schema_v6(connection: Any) -> None:
         version = connection.execute(
             text(
                 "SELECT value FROM schema_metadata "
                 "WHERE key='postgres_schema_version'"
             )
         ).scalar_one_or_none()
-        if version != "5":
-            raise ValueError("security admin requires PostgreSQL schema v5")
+        if version != "6":
+            raise ValueError("security admin requires PostgreSQL schema v6")
 
     @staticmethod
     def _upsert_domain(connection: Any, domain: SecurityDomainSpec) -> None:
@@ -383,6 +393,9 @@ class PostgresSecurityAdmin:
         connection: Any,
         domain_id: str,
         grant: RepositoryGrantSpec,
+        *,
+        source_key: str,
+        source_revision: str,
     ) -> None:
         repository_exists = connection.execute(
             text("SELECT 1 FROM repository WHERE id=:id"),
@@ -425,7 +438,7 @@ class PostgresSecurityAdmin:
             conflict = (
                 "(security_domain_id,repository_id,team_id) WHERE team_id IS NOT NULL"
             )
-        connection.execute(
+        row = connection.execute(
             text(
                 "INSERT INTO repository_grant(id,security_domain_id,repository_id,"
                 "principal_id,team_id,permission,expires_at,revoked_at) VALUES "
@@ -433,9 +446,42 @@ class PostgresSecurityAdmin:
                 "CASE WHEN :active THEN NULL ELSE now() END) ON CONFLICT "
                 f"{conflict} DO UPDATE SET permission=EXCLUDED.permission,"
                 "expires_at=EXCLUDED.expires_at,revoked_at=CASE WHEN :active THEN NULL "
-                "ELSE COALESCE(repository_grant.revoked_at,now()) END"
+                "ELSE COALESCE(repository_grant.revoked_at,now()) END RETURNING id"
             ),
             parameters,
+        ).first()
+        if row is None:
+            raise RuntimeError("repository grant upsert did not return an identity")
+        actual_grant_id = row[0]
+        source_id = stable_id(
+            "grant_source",
+            actual_grant_id,
+            "manifest",
+            source_key,
+        )
+        connection.execute(
+            text(
+                "INSERT INTO repository_grant_source(id,repository_grant_id,"
+                "source_kind,source_key,source_revision,permission,expires_at,"
+                "revoked_at,last_observed_at) VALUES (:id,:grant,'manifest',"
+                ":source_key,:revision,:permission,:expires_at,CASE WHEN :active "
+                "THEN NULL ELSE now() END,now()) ON CONFLICT "
+                "(repository_grant_id,source_kind,source_key) DO UPDATE SET "
+                "source_revision=EXCLUDED.source_revision,"
+                "permission=EXCLUDED.permission,expires_at=EXCLUDED.expires_at,"
+                "revoked_at=CASE WHEN :active THEN NULL ELSE COALESCE("
+                "repository_grant_source.revoked_at,now()) END,"
+                "last_observed_at=now()"
+            ),
+            {
+                "id": source_id,
+                "grant": actual_grant_id,
+                "source_key": source_key,
+                "revision": source_revision,
+                "permission": grant.permission,
+                "expires_at": grant.expires_at,
+                "active": grant.active,
+            },
         )
 
     @staticmethod
