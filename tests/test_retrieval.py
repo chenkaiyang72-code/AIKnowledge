@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -106,6 +107,10 @@ class HybridRetrievalTests(unittest.TestCase):
         self.assertEqual(hits[0].path, "include/demo.h")
         self.assertLessEqual(hits[0].start_line, 1)
         self.assertGreaterEqual(hits[0].end_line, 1)
+        self.assertEqual(
+            hits[0].content_hash,
+            hashlib.sha256(hits[0].content.encode("utf-8")).hexdigest(),
+        )
 
 
 if __name__ == "__main__":

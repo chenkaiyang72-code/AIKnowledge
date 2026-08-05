@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -629,6 +630,7 @@ class Catalog:
     ) -> SearchHit:
         if "content" in row.keys():
             content = row["content"]
+            content_hash = row["content_hash"]
         else:
             source_text = zlib.decompress(row["compressed_content"]).decode(
                 "utf-8", errors="replace"
@@ -637,6 +639,11 @@ class Catalog:
             content = "".join(
                 source_lines[row["start_line"] - 1 : row["end_line"]]
             )
+            # Tree-sitter chunks can begin or end inside a source line. The
+            # fast path restores complete cited lines from the source blob
+            # rather than scanning the multi-million-row FTS table for the
+            # exact AST text, so hash the evidence body actually returned.
+            content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         content_truncated = False
         if len(content) > 1_600:
             content = content[:1_600].rstrip() + "\n…"
@@ -644,7 +651,7 @@ class Catalog:
         return SearchHit(
             chunk_id=row["chunk_id"],
             blob_id=row["blob_id"],
-            content_hash=row["content_hash"],
+            content_hash=content_hash,
             repository=row["repository"],
             snapshot_id=row["snapshot_id"],
             revision=row["revision"],
